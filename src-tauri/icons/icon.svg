@@ -1,28 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="t d">
+  <title id="t">justrain</title>
+  <desc id="d">A glowing raindrop on a deep night-blue ground.</desc>
   <defs>
-    <radialGradient id="bg" cx="50%" cy="14%" r="95%">
+    <radialGradient id="bg" cx="50%" cy="12%" r="98%">
       <stop offset="0%" stop-color="#20233a"/>
-      <stop offset="46%" stop-color="#141628"/>
-      <stop offset="100%" stop-color="#0a0b12"/>
+      <stop offset="46%" stop-color="#12142400"/>
+      <stop offset="46%" stop-color="#121424"/>
+      <stop offset="100%" stop-color="#080910"/>
     </radialGradient>
-    <radialGradient id="glow" cx="50%" cy="52%" r="50%">
-      <stop offset="0%" stop-color="#9184d9" stop-opacity="0.55"/>
-      <stop offset="48%" stop-color="#9184d9" stop-opacity="0.14"/>
-      <stop offset="72%" stop-color="#9184d9" stop-opacity="0"/>
+    <radialGradient id="glow" cx="50%" cy="56%" r="42%">
+      <stop offset="0%" stop-color="#9184d9" stop-opacity="0.60"/>
+      <stop offset="45%" stop-color="#9184d9" stop-opacity="0.16"/>
+      <stop offset="75%" stop-color="#9184d9" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="drop" x1="30%" y1="8%" x2="70%" y2="100%">
-      <stop offset="0%" stop-color="#f3f5fe"/>
-      <stop offset="42%" stop-color="#d2cefd"/>
-      <stop offset="100%" stop-color="#9184d9"/>
+    <linearGradient id="drop" x1="34%" y1="6%" x2="66%" y2="100%">
+      <stop offset="0%" stop-color="#f6f7ff"/>
+      <stop offset="44%" stop-color="#d2cefd"/>
+      <stop offset="100%" stop-color="#8f82d8"/>
     </linearGradient>
+    <clipPath id="round"><rect width="1024" height="1024" rx="220"/></clipPath>
   </defs>
-  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
-  <circle cx="512" cy="548" r="360" fill="url(#glow)"/>
-  <path d="M512 196
-           C 512 196 742 520 742 660
-           C 742 787 639 878 512 878
-           C 385 878 282 787 282 660
-           C 282 520 512 196 512 196 Z"
-        fill="url(#drop)"/>
-  <ellipse cx="430" cy="590" rx="52" ry="92" fill="#ffffff" opacity="0.28" transform="rotate(-18 430 590)"/>
+  <g clip-path="url(#round)">
+    <rect width="1024" height="1024" fill="#0b0c14"/>
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <circle cx="512" cy="600" r="360" fill="url(#glow)"/>
+    <path d="M512 172 C 512 172 760 512 760 664 C 760 801 649 892 512 892 C 375 892 264 801 264 664 C 264 512 512 172 512 172 Z" fill="url(#drop)"/>
+    <ellipse cx="432" cy="566" rx="42" ry="92" fill="#ffffff" opacity="0.32" transform="rotate(-20 432 566)"/>
+  </g>
 </svg>
