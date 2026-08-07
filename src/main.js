@@ -1,20 +1,17 @@
 /* justrain — vanilla port of Rain.dc.html.
    Canvas rain + thunder flash ported verbatim from the design's tick loop.
-   Audio is downloaded once (Rust), then played NATIVELY via a Media3
+   Audio is bundled into the APK and played NATIVELY via a Media3
    (ExoPlayer + MediaSessionService) plugin so it has a media notification and
    keeps playing with the screen off. The webview is just the UI + controller. */
 
 const $ = (id) => document.getElementById(id);
 
-const AUDIO_URL = "https://rain.osmosis.page/rain-loop-long.mp3";
 const TAURI = window.__TAURI__;
 const invoke = TAURI ? TAURI.core.invoke : null;
-const listen = TAURI ? TAURI.event.listen : null;
 const NP = "plugin:native-player|";
 
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
-  hasFile: false,          // is the rain audio downloaded to disk?
   vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
   sheet: null, chrome: true,
   thunder: true, softStart: true, background: true, dim: false,
@@ -169,87 +166,19 @@ async function applyPlayState() {
   }
 }
 
-// Point the native player at the cached local file.
-async function nativeLoad() {
-  const uri = await invoke("audio_file_uri");
-  await invoke(NP + "load", { path: uri });
-  audioReady = true;
-}
-
-/* ─── first-run download flow ─── */
-function mb(bytes) { return (bytes / 1048576).toFixed(1); }
-function showFirstRun(remoteBytes) {
-  $("frSize").textContent = remoteBytes > 0 ? "~" + Math.round(remoteBytes / 1048576) + " MB" : "~15 MB";
-  $("firstrun").classList.add("show");
-}
-function hideFirstRun() { $("firstrun").classList.remove("show"); }
-function setProgress(d, t) {
-  const pct = t > 0 ? (d / t) * 100 : 0;
-  $("frProgBar").style.width = pct + "%";
-  $("frProgText").textContent = mb(d) + " / " + (t > 0 ? mb(t) : "?") + " MB";
-}
-
-let downloading = false;
-let lastRemoteBytes = 0;
-async function startDownload() {
-  if (downloading || !invoke) return;
-  downloading = true;
-  const btn = $("frDownload");
-  btn.disabled = true; btn.textContent = "downloading…";
-  $("frError").classList.remove("show");
-  $("frProgWrap").style.display = "block";
-
-  let un = null;
-  try { if (listen) un = await listen("download-progress", (e) => setProgress(e.payload[0], e.payload[1])); }
-  catch (e) { console.error("[justrain] progress listener", e); }
-  try {
-    await invoke("download_audio", { url: AUDIO_URL });
-  } catch (e) {
-    $("frError").textContent = "download failed: " + e + " — check your connection.";
-    $("frError").classList.add("show");
-    btn.disabled = false; btn.textContent = "try again";
-    downloading = false;
-    if (un) un();
-    return;
-  }
-  if (un) un();
-  hideFirstRun();
-  downloading = false;
-  state.hasFile = true;
-  try { await loadAndPlay(); }
-  catch (e) { showError("downloaded, but couldn't start audio: " + errText(e), e); }
-}
-
-// Load the cached file into the native player and start it. Surfaces failures.
-async function loadAndPlay() {
-  await nativeLoad();          // throws (and we surface) if the native player can't load it
-  state.playing = true;
-  await applyPlayState();
-  render();
-}
-
-// Boot: use the cached audio if present, else prompt to download it.
+// Boot: the rain audio is bundled in the APK, so the native player is ready
+// as soon as the plugin binds to its service. Start playing immediately.
 async function bootAudio() {
   if (!invoke) { showError("not running under Tauri — audio unavailable"); return; }
-  // log the resolved cache path (visible in `adb logcat` via the WebView console)
-  try { console.log("[justrain] cache:", JSON.stringify(await invoke("audio_debug"))); }
-  catch (e) { console.error("[justrain] audio_debug", e); }
-
-  let cached = false;
-  try { cached = await invoke("audio_cached"); }
-  catch (e) { showError("cache check failed: " + errText(e), e); return; }
-  state.hasFile = cached;
-  render();   // reflect hasFile immediately, independent of whether load below succeeds
-
-  if (cached) {
-    try { await loadAndPlay(); }
-    catch (e) { showError("couldn't start audio: " + errText(e), e); render(); }
-  } else {
-    showFirstRun(0);           // prompt immediately; fill in the size once the HEAD returns
-    invoke("audio_remote_size", { url: AUDIO_URL })
-      .then((sz) => { lastRemoteBytes = sz || 0; if (sz > 0) $("frSize").textContent = "~" + Math.round(sz / 1048576) + " MB"; })
-      .catch((e) => console.error("[justrain] remote_size", e));
+  audioReady = true;
+  try {
+    state.playing = true;
+    await applyPlayState();
+  } catch (e) {
+    state.playing = false;
+    showError("couldn't start audio: " + errText(e), e);
   }
+  render();
 }
 
 // "keep playing when locked": when off, pause on background and resume on return.
@@ -271,15 +200,8 @@ function clock(minsFromNow) {
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
   idleAt = Date.now();
-  // The download is a one-time gate handled entirely at app start (bootAudio).
-  // The play button never triggers it — no surprise popup mid-session.
-  if (!state.hasFile) return;
-  if (!audioReady) {                          // file present but not loaded → (re)try loading
-    hideError();
-    loadAndPlay().catch((e) => showError("couldn't start audio: " + errText(e), e));
-    return;
-  }
-  state.playing = !state.playing;             // normal play/pause
+  if (!audioReady) return;
+  state.playing = !state.playing;
   state.chrome = true;
   applyPlayState();
   render();
@@ -288,7 +210,7 @@ function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; 
 function setTimer(m) {
   idleAt = Date.now();
   state.timer = m; state.remaining = m * 60; state.sheet = null;
-  if (m > 0 && state.hasFile && audioReady) state.playing = true;
+  if (m > 0 && audioReady) state.playing = true;
   applyPlayState();
   render();
 }
@@ -356,17 +278,13 @@ function render() {
   const s = state;
   const show = s.chrome || !s.playing;
 
-  $("stateWord").textContent = !s.hasFile ? "no rain yet" : (s.playing ? "raining" : "paused");
+  $("stateWord").textContent = s.playing ? "raining" : "paused";
   $("bigTime").textContent = s.timer > 0 ? fmt(s.remaining) : fmt(s.elapsed);
-  $("bigLabel").textContent = !s.hasFile
-    ? "download in settings"
-    : (s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held"));
+  $("bigLabel").textContent = s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held");
 
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
   $("playBtn").style.paddingLeft = s.playing ? "0" : "5px";
-  $("playBtn").classList.toggle("disabled", !s.hasFile);
-  $("dlRow").style.display = s.hasFile ? "none" : "flex";
 
   $("volFill").style.width = (s.vol * 100) + "%";
   $("volKnob").style.left = (s.vol * 100) + "%";
@@ -431,11 +349,7 @@ $("timerRow").addEventListener("click", (e) => { e.stopPropagation(); openTimer(
 $("gearBtn").addEventListener("click", (e) => { e.stopPropagation(); openSettings(); });
 $("backdrop").addEventListener("click", closeSheet);
 $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVolDown(e); });
-$("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
-$("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
 $("errclose").addEventListener("click", (e) => { e.stopPropagation(); hideError(); });
-// explicit, user-initiated retry — the only place besides app-start that opens the download prompt
-$("dlRow").addEventListener("click", (e) => { e.stopPropagation(); showFirstRun(lastRemoteBytes); });
 
 buildLists();
 $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");

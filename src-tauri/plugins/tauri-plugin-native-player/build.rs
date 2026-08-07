@@ -1,4 +1,4 @@
-const COMMANDS: &[&str] = &["load", "play", "pause", "stop", "set_volume"];
+const COMMANDS: &[&str] = &["play", "pause", "set_volume"];
 
 fn main() {
     tauri_plugin::Builder::new(COMMANDS)

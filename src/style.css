@@ -181,42 +181,6 @@ body {
 .sheet-credit { text-align: center; font-size: 10px; letter-spacing: .04em; color: rgba(233,233,237,.28); margin-top: 8px; }
 .sheet-credit a { color: rgba(145,132,217,.7); text-decoration: none; }
 
-/* ── first-run download prompt ── */
-.firstrun {
-  position: absolute; inset: 0; z-index: 20;
-  display: none; align-items: center; justify-content: center;
-  padding: 32px 26px;
-  background: rgba(6,7,12,.72); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-}
-.firstrun.show { display: flex; }
-.fr-card {
-  width: 100%; max-width: 340px;
-  display: flex; flex-direction: column; align-items: center; text-align: center;
-  padding: 30px 24px 22px; border-radius: 24px;
-  background: rgba(24,26,42,.94); -webkit-backdrop-filter: blur(22px); backdrop-filter: blur(22px);
-  border: 1px solid rgba(233,233,237,.12); box-shadow: 0 30px 80px rgba(0,0,0,.6);
-}
-.fr-drop { margin-bottom: 16px; filter: drop-shadow(0 0 22px rgba(145,132,217,.55)); }
-.fr-title { font-family: var(--font-heading); font-weight: 500; font-size: 20px; letter-spacing: -.01em; margin-bottom: 10px; }
-.fr-text { font-size: 13.5px; line-height: 1.5; color: rgba(233,233,237,.62); margin-bottom: 22px; }
-.fr-text span { color: var(--color-accent-200); }
-.fr-prog-wrap { display: none; width: 100%; margin-bottom: 18px; }
-.fr-prog { width: 100%; height: 5px; border-radius: 3px; background: rgba(233,233,237,.12); overflow: hidden; }
-.fr-prog-bar { width: 0%; height: 100%; border-radius: 3px; background: var(--color-accent); box-shadow: 0 0 12px rgba(145,132,217,.7); transition: width .15s linear; }
-.fr-prog-text { margin-top: 8px; font-size: 11.5px; letter-spacing: .04em; color: rgba(233,233,237,.5); font-variant-numeric: tabular-nums; }
-.fr-error { display: none; font-size: 12.5px; color: #f0a3a3; margin-bottom: 14px; }
-.fr-error.show { display: block; }
-.fr-btn {
-  width: 100%; height: 52px; border-radius: 14px; cursor: pointer;
-  font-family: var(--font-body); font-size: 15px; color: #f3f5fe;
-  background: rgba(145,132,217,.16); border: 1px solid var(--color-accent);
-  box-shadow: 0 0 30px rgba(145,132,217,.22); transition: background .2s;
-}
-.fr-btn:hover { background: rgba(145,132,217,.26); }
-.fr-btn:disabled { opacity: .5; cursor: default; }
-.fr-later { margin-top: 12px; background: transparent; border: 0; cursor: pointer; font-family: var(--font-body); font-size: 12.5px; color: rgba(233,233,237,.4); }
-.fr-later:hover { color: rgba(233,233,237,.65); }
-
 /* ── error banner ── */
 .errbar {
   position: fixed; left: 0; right: 0; top: 0; z-index: 40;
@@ -229,10 +193,3 @@ body {
 .errbar.show { display: flex; }
 .errbar span { flex: 1; word-break: break-word; }
 .errbar button { flex: none; background: transparent; border: 0; color: #ffe9ec; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
-
-/* play button is inert until the rain audio is downloaded; hint that visually */
-.play-btn.disabled { opacity: .45; cursor: default; }
-
-/* settings: download-rain row (only shown if the file is missing) */
-.row-download { margin-bottom: 10px; background: rgba(145,132,217,.10); border-color: rgba(145,132,217,.35); }
-.row-download .row-cta { font-size: 13px; color: var(--color-accent-200); }

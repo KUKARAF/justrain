@@ -85,35 +85,10 @@
     <div id="timerList" class="sheet-list"></div>
   </div>
 
-  <!-- first-run: rain audio must be downloaded before the app can play -->
-  <div id="firstrun" class="firstrun">
-    <div class="fr-card">
-      <div class="fr-drop">
-        <svg width="34" height="40" viewBox="0 0 34 40" fill="none"><path d="M17 3 C17 3 30 20 30 28 C30 35.2 24.2 40 17 40 C9.8 40 4 35.2 4 28 C4 20 17 3 17 3 Z" fill="#d2cefd"></path></svg>
-      </div>
-      <div class="fr-title">one download, then rain</div>
-      <div class="fr-text">justrain streams a long, seamless rain loop. It needs to fetch the sound
-        (<span id="frSize">~15 MB</span>) once — after that it plays offline, forever.</div>
-
-      <div id="frProgWrap" class="fr-prog-wrap">
-        <div class="fr-prog"><div id="frProgBar" class="fr-prog-bar"></div></div>
-        <div id="frProgText" class="fr-prog-text">0.0 / 0.0 MB</div>
-      </div>
-      <div id="frError" class="fr-error"></div>
-
-      <button id="frDownload" class="fr-btn">download the rain</button>
-      <button id="frLater" class="fr-later">not now</button>
-    </div>
-  </div>
-
   <div id="settingsSheet" class="sheet">
     <div class="grip"></div>
     <div class="sheet-title">settings</div>
     <div class="sheet-sub">four switches. that is the whole app.</div>
-    <button id="dlRow" class="row row-download" style="display:none">
-      <span class="row-label">rain audio not downloaded</span>
-      <span class="row-cta">download</span>
-    </button>
     <div id="settingsList" class="sheet-list"></div>
     <div class="sheet-footer" id="appVersion">justrain</div>
     <div class="sheet-credit">rain by Argande102 · <a href="https://freesound.org/s/170438/" target="_blank" rel="noopener">freesound</a> · CC-BY-3.0</div>
