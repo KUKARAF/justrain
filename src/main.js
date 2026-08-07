@@ -1,8 +1,16 @@
 /* justrain — vanilla port of Rain.dc.html.
    Canvas rain + thunder flash ported verbatim from the design's tick loop.
-   Audio (Web Audio API) is the app's own addition on top of the static design. */
+   Audio is downloaded once from the CDN on first run (Rust side), then cached
+   and played gaplessly via the Web Audio API. */
 
 const $ = (id) => document.getElementById(id);
+
+// Remote rain loop — fetched once through Rust (avoids webview CORS), cached in
+// the app data dir, then played offline forever after.
+const AUDIO_URL = "https://rain.osmosis.page/rain-loop-long.mp3";
+const TAURI = window.__TAURI__;
+const invoke = TAURI ? TAURI.core.invoke : null;
+const listen = TAURI ? TAURI.event.listen : null;
 
 const state = {
   playing: true, vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
@@ -43,7 +51,6 @@ function tick(t) {
   const dt = Math.min(48, t - (lastT || t)); lastT = t;
   const k = dt / 16.67;
   const s = state;
-  // last 60s of the timer thins the rain out
   const fade = s.timer > 0 && s.remaining < 60 ? Math.max(0, s.remaining / 60) : 1;
   const target = s.playing ? 0.82 * fade : 0;
   const rate = s.softStart && s.playing ? 0.012 : 0.03;
@@ -68,7 +75,7 @@ function tick(t) {
 
   if (s.thunder && s.playing) {
     boltT -= dt;
-    if (boltT <= 0) { flash = 1; boltT = 9000 + Math.random() * 14000; triggerThunderAudio(); }
+    if (boltT <= 0) { flash = 1; boltT = 9000 + Math.random() * 14000; }
   }
   if (flash > 0.004) {
     flash *= Math.pow(0.9, k);
@@ -85,26 +92,18 @@ function tick(t) {
 /* ─────────────────────────── audio engine ─────────────────────────── */
 let audioCtx = null, gainNode = null, source = null, buffer = null, audioReady = false;
 
-async function initAudio() {
+function ensureAudioContext() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   gainNode = audioCtx.createGain();
   gainNode.gain.value = 0;
   gainNode.connect(audioCtx.destination);
-  try {
-    const res = await fetch("assets/rain.ogg");
-    const ab = await res.arrayBuffer();
-    buffer = await audioCtx.decodeAudioData(ab);
-    audioReady = true;
-    if (state.playing) startSource();
-    applyGain(state.softStart ? 30 : 0.4);
-  } catch (e) { console.error("audio load failed", e); }
 }
 function startSource() {
   if (!audioReady || source) return;
   source = audioCtx.createBufferSource();
   source.buffer = buffer;
-  source.loop = true;              // seamless: the clip is crossfade-looped
+  source.loop = true;              // the clip is crossfade-looped -> seamless
   source.connect(gainNode);
   source.start();
 }
@@ -117,20 +116,81 @@ function targetGain() {
   if (state.timer > 0 && state.remaining < 60) g *= Math.max(0, state.remaining / 60);
   return g;
 }
-// ramp gain toward its target over `seconds`
 function applyGain(seconds) {
   if (!gainNode || !audioCtx) return;
   const now = audioCtx.currentTime;
   gainNode.gain.cancelScheduledValues(now);
   gainNode.gain.setValueAtTime(Math.max(0.0001, gainNode.gain.value), now);
-  const tgt = Math.max(0.0001, targetGain());
-  gainNode.gain.linearRampToValueAtTime(tgt, now + Math.max(0.02, seconds));
+  gainNode.gain.linearRampToValueAtTime(Math.max(0.0001, targetGain()), now + Math.max(0.02, seconds));
 }
-function triggerThunderAudio() { /* rain loop is deliberately thunder-free; thunder is visual only for now */ }
-
 async function resumeAudio() {
-  if (!audioCtx) { await initAudio(); return; }
-  if (audioCtx.state === "suspended") { try { await audioCtx.resume(); } catch (_) {} }
+  if (audioCtx && audioCtx.state === "suspended") { try { await audioCtx.resume(); } catch (_) {} }
+}
+
+// Decode the cached bytes and (if playing) start the loop.
+async function loadCachedAudio() {
+  ensureAudioContext();
+  const bytes = await invoke("load_audio");           // ArrayBuffer
+  const ab = bytes instanceof ArrayBuffer ? bytes : (bytes.buffer || bytes);
+  buffer = await audioCtx.decodeAudioData(ab);
+  audioReady = true;
+  if (state.playing) startSource();
+  applyGain(state.softStart ? 30 : 0.4);
+}
+
+/* ─── first-run download flow ─── */
+function mb(bytes) { return (bytes / 1048576).toFixed(1); }
+function showFirstRun(remoteBytes) {
+  $("frSize").textContent = remoteBytes > 0 ? "~" + Math.round(remoteBytes / 1048576) + " MB" : "~15 MB";
+  $("firstrun").classList.add("show");
+}
+function hideFirstRun() { $("firstrun").classList.remove("show"); }
+function setProgress(d, t) {
+  const pct = t > 0 ? (d / t) * 100 : 0;
+  $("frProgBar").style.width = pct + "%";
+  $("frProgText").textContent = mb(d) + " / " + (t > 0 ? mb(t) : "?") + " MB";
+}
+
+let downloading = false;
+let lastRemoteBytes = 0;
+async function startDownload() {
+  if (downloading || !invoke) return;
+  downloading = true;
+  const btn = $("frDownload");
+  btn.disabled = true; btn.textContent = "downloading…";
+  $("frError").classList.remove("show");
+  $("frProgWrap").style.display = "block";
+  ensureAudioContext(); resumeAudio();
+
+  let un = null;
+  if (listen) un = await listen("download-progress", (e) => setProgress(e.payload[0], e.payload[1]));
+  try {
+    await invoke("download_audio", { url: AUDIO_URL });
+  } catch (e) {
+    $("frError").textContent = "download failed: " + e + " — check your connection.";
+    $("frError").classList.add("show");
+    btn.disabled = false; btn.textContent = "try again";
+    downloading = false;
+    if (un) un();
+    return;
+  }
+  if (un) un();
+  hideFirstRun();
+  downloading = false;
+  await loadCachedAudio();
+  resumeAudio();
+}
+
+// Boot: use the cached audio if present, otherwise prompt to download it.
+async function bootAudio() {
+  ensureAudioContext();
+  if (!invoke) { console.warn("not running under Tauri; audio unavailable"); return; }
+  let status;
+  try { status = await invoke("audio_status", { url: AUDIO_URL }); }
+  catch (e) { console.error("audio_status failed", e); showFirstRun(0); return; }
+  lastRemoteBytes = status.remote_bytes || 0;
+  if (status.cached) { try { await loadCachedAudio(); } catch (e) { console.error(e); } }
+  else { showFirstRun(status.remote_bytes); }
 }
 
 /* ─────────────────────────── screen wake lock ─────────────────────────── */
@@ -149,9 +209,11 @@ document.addEventListener("visibilitychange", () => {
 /* ─────────────────────────── media session ─────────────────────────── */
 function initMediaSession() {
   if (!("mediaSession" in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({ title: "Rain", artist: "petrichor", album: "justrain" });
-  navigator.mediaSession.setActionHandler("play", () => { if (!state.playing) togglePlay(); });
-  navigator.mediaSession.setActionHandler("pause", () => { if (state.playing) togglePlay(); });
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: "Rain", artist: "petrichor", album: "justrain" });
+    navigator.mediaSession.setActionHandler("play", () => { if (!state.playing) togglePlay(); });
+    navigator.mediaSession.setActionHandler("pause", () => { if (state.playing) togglePlay(); });
+  } catch (_) {}
 }
 function updateMediaSession() {
   if ("mediaSession" in navigator) navigator.mediaSession.playbackState = state.playing ? "playing" : "paused";
@@ -166,9 +228,12 @@ function clock(minsFromNow) {
 }
 
 /* ─────────────────────────── actions ─────────────────────────── */
+function needsDownload() { return !audioReady && !downloading; }
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
   idleAt = Date.now();
+  // can't start rain we don't have yet — surface the download prompt instead
+  if (needsDownload()) { showFirstRun(lastRemoteBytes); return; }
   state.playing = !state.playing; state.chrome = true;
   resumeAudio();
   if (state.playing) { startSource(); applyGain(state.softStart ? 30 : 0.4); }
@@ -191,23 +256,18 @@ function openTimer() { state.sheet = "timer"; state.chrome = true; render(); }
 function openSettings() { state.sheet = "settings"; state.chrome = true; render(); }
 function closeSheet() { state.sheet = null; render(); }
 
-/* volume drag */
 function onVolDown(e) {
   const el = $("volTrack");
   const move = (ev) => {
     const r = el.getBoundingClientRect();
-    const x = (ev.touches ? ev.touches[0].clientX : ev.clientX);
+    const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
     idleAt = Date.now();
     state.vol = Math.max(0, Math.min(1, (x - r.left) / r.width));
     applyGain(0.1); render();
   };
   move(e);
-  const up = () => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-  };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
+  const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
 }
 
 /* ─────────────────────────── render ─────────────────────────── */
@@ -255,43 +315,35 @@ function render() {
   $("bigTime").textContent = s.timer > 0 ? fmt(s.remaining) : fmt(s.elapsed);
   $("bigLabel").textContent = s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held");
 
-  // play/pause icon
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
   $("playBtn").style.paddingLeft = s.playing ? "0" : "5px";
 
-  // volume
   $("volFill").style.width = (s.vol * 100) + "%";
   $("volKnob").style.left = (s.vol * 100) + "%";
 
-  // thunder switch
   $("thunderTrack").classList.toggle("on", s.thunder);
 
-  // timer row value
   const tv = $("timerVal");
   tv.textContent = s.timer > 0 ? s.timer + " min" : "off";
   tv.classList.toggle("on", s.timer > 0);
 
-  // chrome + gear visibility
   $("chrome").style.opacity = show ? "1" : "0";
   $("chrome").style.transform = show ? "translateY(0)" : "translateY(14px)";
   $("chrome").style.pointerEvents = show ? "auto" : "none";
   $("gearWrap").style.opacity = show ? "1" : "0";
   $("gearWrap").style.pointerEvents = show ? "auto" : "none";
 
-  // sheets
   $("backdrop").classList.toggle("show", !!s.sheet);
   $("timerSheet").classList.toggle("open", s.sheet === "timer");
   $("settingsSheet").classList.toggle("open", s.sheet === "settings");
 
-  // timer options selected state
   $("timerList").querySelectorAll(".opt").forEach((b) => {
     const m = Number(b.dataset.m);
     b.classList.toggle("sel", s.timer === m);
     b.querySelector(".opt-sub").textContent = m === 0 ? "rain keeps going" : "until " + clock(m);
     b.querySelector(".opt-check").style.display = s.timer === m ? "block" : "none";
   });
-  // settings switches
   $("settingsList").querySelectorAll(".set").forEach((b) => {
     b.querySelector(".switch").classList.toggle("on", !!s[b.dataset.key]);
   });
@@ -310,7 +362,7 @@ setInterval(() => {
     s.elapsed += 1;
     if (s.timer > 0) {
       s.remaining = Math.max(0, s.remaining - 1);
-      if (s.remaining < 60) applyGain(1.0); // track the rain-fade over the last minute
+      if (s.remaining < 60) applyGain(1.0);
       if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; stopSource(); updateWakeLock(); updateMediaSession(); }
     }
     render();
@@ -322,7 +374,6 @@ setInterval(() => {
 
 /* ─────────────────────────── wire up ─────────────────────────── */
 $("screen").addEventListener("click", (e) => {
-  // tapping empty screen reveals chrome (ignore clicks on buttons/sheets which stopPropagation)
   if (e.target === $("screen") || e.target === $("rain") || e.target === $("vignette") || e.target === $("glow") || e.target === $("ui") || e.target.classList.contains("center")) reveal();
 });
 $("playBtn").addEventListener("click", (e) => { e.stopPropagation(); togglePlay(); });
@@ -331,8 +382,9 @@ $("timerRow").addEventListener("click", (e) => { e.stopPropagation(); openTimer(
 $("gearBtn").addEventListener("click", (e) => { e.stopPropagation(); openSettings(); });
 $("backdrop").addEventListener("click", closeSheet);
 $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVolDown(e); });
+$("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
+$("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
 
-// first user gesture unlocks audio (Android webview autoplay policy)
 function firstGesture() { resumeAudio(); window.removeEventListener("pointerdown", firstGesture); window.removeEventListener("touchstart", firstGesture); }
 window.addEventListener("pointerdown", firstGesture);
 window.addEventListener("touchstart", firstGesture);
@@ -341,4 +393,4 @@ buildLists();
 initMediaSession();
 render();
 requestAnimationFrame(tick);
-initAudio().then(() => { resumeAudio(); updateWakeLock(); });
+bootAudio();

@@ -13,12 +13,11 @@ signed Android **APK**. The UI is a faithful port of the `Rain.dc.html` design
 
 ```
 src/                     frontend (Tauri frontendDist)
-  index.html             screen markup
+  index.html             screen markup + first-run download prompt
   style.css              Nocturne tokens + styles
   main.js                rain canvas, state machine, Web Audio engine
-  assets/rain.ogg        seamless rain loop (see ATTRIBUTION.md)
 src-tauri/               Rust core
-  src/lib.rs             tauri entry point + app_info command
+  src/lib.rs             tauri entry point + audio download/cache commands
   tauri.conf.json        app config (identifier page.osmosis.justrain)
   icons/                 app icon set (raindrop)
 .github/workflows/android.yml   CI: build + sign + release
@@ -28,9 +27,19 @@ src-tauri/               Rust core
 
 ## Audio
 
-`src/assets/rain.ogg` is a seamless ~11-minute crossfade loop played gaplessly
-via the Web Audio API (`AudioBufferSourceNode.loop`). Volume, soft-start
-fade-in, and the sleep-timer fade-out are done with a `GainNode`.
+The rain is a seamless ~11-minute crossfade loop. It is **not bundled** in the
+APK — on first launch the app checks the app-data cache and, if empty, shows a
+prompt asking the user to confirm downloading ~15 MB. The download runs in
+**Rust** (`download_audio`, streaming with `download-progress` events) so it
+isn't subject to webview CORS, saves to the app data dir, and thereafter plays
+offline. It is decoded and played gaplessly via the Web Audio API
+(`AudioBufferSourceNode.loop`); volume, soft-start fade-in, and the sleep-timer
+fade-out use a `GainNode`.
+
+- Source URL: `https://rain.osmosis.page/rain-loop-long.mp3` (hosted from the
+  `static` repo's `public/rain/`).
+- Rust commands: `audio_status` (cached? + remote size via HEAD),
+  `download_audio` (stream + cache), `load_audio` (return cached bytes).
 
 Attribution (required — CC-BY-3.0): the loop is derived from *"18 minutes of
 raining and thundering"* by **Argande102** on Freesound
