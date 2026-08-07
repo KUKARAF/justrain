@@ -123,19 +123,46 @@ function applyGain(seconds) {
   gainNode.gain.setValueAtTime(Math.max(0.0001, gainNode.gain.value), now);
   gainNode.gain.linearRampToValueAtTime(Math.max(0.0001, targetGain()), now + Math.max(0.02, seconds));
 }
-async function resumeAudio() {
-  if (audioCtx && audioCtx.state === "suspended") { try { await audioCtx.resume(); } catch (_) {} }
+let pendingPlay = false;
+
+// Fade the rain in. Soft-start begins from an audible floor (not silence) so
+// playback is heard immediately, then rises to full over ~18s.
+function fadeIn() {
+  if (!gainNode || !audioCtx) return;
+  const now = audioCtx.currentTime;
+  const t = Math.max(0.0001, targetGain());
+  gainNode.gain.cancelScheduledValues(now);
+  if (state.softStart) {
+    gainNode.gain.setValueAtTime(Math.max(0.0001, t * 0.22), now);
+    gainNode.gain.linearRampToValueAtTime(t, now + 18);
+  } else {
+    gainNode.gain.setValueAtTime(Math.max(0.0001, gainNode.gain.value), now);
+    gainNode.gain.linearRampToValueAtTime(t, now + 0.4);
+  }
 }
 
-// Decode the cached bytes and (if playing) start the loop.
+// Start the loop only when the context is actually running — Android WebView
+// keeps AudioContext suspended until a user gesture. Otherwise defer.
+function maybeStartPlayback() {
+  if (!audioReady || !state.playing) return;
+  if (!audioCtx || audioCtx.state !== "running") { pendingPlay = true; return; }
+  if (!source) { startSource(); fadeIn(); }
+  pendingPlay = false;
+}
+
+async function resumeAudio() {
+  if (audioCtx && audioCtx.state === "suspended") { try { await audioCtx.resume(); } catch (_) {} }
+  if (pendingPlay) maybeStartPlayback();
+}
+
+// Decode the cached bytes and start the loop as soon as allowed.
 async function loadCachedAudio() {
   ensureAudioContext();
   const bytes = await invoke("load_audio");           // ArrayBuffer
   const ab = bytes instanceof ArrayBuffer ? bytes : (bytes.buffer || bytes);
   buffer = await audioCtx.decodeAudioData(ab);
   audioReady = true;
-  if (state.playing) startSource();
-  applyGain(state.softStart ? 30 : 0.4);
+  maybeStartPlayback();
 }
 
 /* ─── first-run download flow ─── */
@@ -210,7 +237,7 @@ document.addEventListener("visibilitychange", () => {
 function initMediaSession() {
   if (!("mediaSession" in navigator)) return;
   try {
-    navigator.mediaSession.metadata = new MediaMetadata({ title: "Rain", artist: "petrichor", album: "justrain" });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: "Rain", artist: "justrain", album: "justrain" });
     navigator.mediaSession.setActionHandler("play", () => { if (!state.playing) togglePlay(); });
     navigator.mediaSession.setActionHandler("pause", () => { if (state.playing) togglePlay(); });
   } catch (_) {}
@@ -234,18 +261,27 @@ function togglePlay() {
   idleAt = Date.now();
   // can't start rain we don't have yet — surface the download prompt instead
   if (needsDownload()) { showFirstRun(lastRemoteBytes); return; }
-  state.playing = !state.playing; state.chrome = true;
-  resumeAudio();
-  if (state.playing) { startSource(); applyGain(state.softStart ? 30 : 0.4); }
-  else { applyGain(0.6); }
+  // If we're nominally "playing" but no sound is out yet (context suspended /
+  // fresh launch), a tap should START it rather than pause it.
+  const silentButPlaying = state.playing && (!source || !audioCtx || audioCtx.state !== "running");
+  if (!silentButPlaying) state.playing = !state.playing;
+  state.chrome = true;
+  resumeAudio().then(() => {
+    if (state.playing) { if (!source) maybeStartPlayback(); else fadeIn(); }
+    else applyGain(0.6);
+  });
   updateWakeLock(); updateMediaSession(); render();
 }
 function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; render(); }
 function setTimer(m) {
   idleAt = Date.now();
   state.timer = m; state.remaining = m * 60; state.sheet = null;
-  if (m > 0) { state.playing = true; resumeAudio(); startSource(); }
-  applyGain(0.4); updateWakeLock(); updateMediaSession(); render();
+  if (m > 0) state.playing = true;
+  resumeAudio().then(() => {
+    if (state.playing) { if (!source) maybeStartPlayback(); else applyGain(0.4); }
+    else applyGain(0.6);
+  });
+  updateWakeLock(); updateMediaSession(); render();
 }
 function toggleSetting(key) {
   state[key] = !state[key];
@@ -391,6 +427,7 @@ window.addEventListener("touchstart", firstGesture);
 
 buildLists();
 initMediaSession();
+$("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");
 render();
 requestAnimationFrame(tick);
 bootAudio();

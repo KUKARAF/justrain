@@ -99,6 +99,17 @@ jobs:
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "${RUNNER_TEMP}/release.jks"
 
+      - name: Inject app version into frontend
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.vars.outputs.prerelease }}" = "true" ]; then
+            DISP="pre ${{ steps.vars.outputs.short_sha }}"
+          else
+            DISP="${{ steps.vars.outputs.version }}"
+          fi
+          echo "window.__JUSTRAIN_VERSION__ = '${DISP}';" > src/version.js
+          cat src/version.js
+
       - name: Build signed APK
         run: |
           set -uo pipefail
@@ -136,6 +147,11 @@ jobs:
         run: |
           APKSIGNER="$(find "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" -name apksigner | head -n1)"
           "${APKSIGNER}" verify --verbose "${{ steps.apk.outputs.path }}"
+
+      - name: Show APK version (diagnostic)
+        run: |
+          AAPT="$(find "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" -name aapt | head -n1)"
+          "${AAPT}" dump badging "${{ steps.apk.outputs.path }}" | grep -E "package: name|versionName|versionCode" || true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
