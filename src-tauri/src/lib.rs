@@ -84,22 +84,32 @@ async fn download_audio(app: tauri::AppHandle, url: String) -> Result<(), String
     Ok(())
 }
 
-/// Return the cached audio bytes to the webview as an ArrayBuffer.
+/// Return the cached audio file as a `file://` URI for the native player.
 #[tauri::command]
-fn load_audio(app: tauri::AppHandle) -> Result<tauri::ipc::Response, String> {
+fn audio_file_uri(app: tauri::AppHandle) -> Result<String, String> {
     let path = audio_path(&app)?;
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    Ok(tauri::ipc::Response::new(bytes))
+    if !path.exists() {
+        return Err("audio not downloaded".into());
+    }
+    Ok(format!("file://{}", path.to_string_lossy()))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(mobile)]
+    {
+        builder = builder.plugin(tauri_plugin_native_player::init());
+    }
+
+    builder
         .invoke_handler(tauri::generate_handler![
             app_info,
             audio_status,
             download_audio,
-            load_audio
+            audio_file_uri
         ])
         .run(tauri::generate_context!())
         .expect("error while running justrain");

@@ -89,12 +89,19 @@ cargo tauri dev          # runs the webview against src/
 Android builds are produced by CI; to build locally you need the Android SDK +
 NDK r27 and `cargo tauri android init && cargo tauri android build --apk`.
 
-## Notes / limitations
+## Playback (native)
 
-- **Background audio**: the app requests a screen wake-lock and registers a
-  media session, but true audio playback with the screen fully off/app
-  backgrounded on Android needs a native foreground service — a future Rust/
-  Kotlin Tauri plugin. The "keep playing when locked" switch reflects intent
-  today; wake-lock covers the screen-dim case.
+Audio plays through a bundled Tauri plugin, `tauri-plugin-native-player`
+(`src-tauri/plugins/`), which wraps AndroidX **Media3 (ExoPlayer +
+MediaSessionService)**. This gives a **media notification** with controls and
+**true background / screen-off playback**. The webview is only the UI: it calls
+`plugin:native-player|load|play|pause|stop|set_volume`. Volume, soft-start
+fade-in and the sleep-timer fade-out are done by stepping `set_volume`; the loop
+is `Player.REPEAT_MODE_ONE`. The player's manifest (service + FOREGROUND_SERVICE
+/ POST_NOTIFICATIONS permissions) merges into the app automatically, so no
+`gen/android` patching is needed for it.
+
+- **"keep playing when locked"**: on → the foreground service keeps the rain
+  going with the screen off; off → the app pauses when backgrounded.
 - **Thunder** is a visual lightning flash on the canvas; the rain loop is
   deliberately thunder-free audio.

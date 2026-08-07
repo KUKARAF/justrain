@@ -1,0 +1,9 @@
+[default]
+description = "Default permissions for the native-player plugin"
+permissions = [
+    "allow-load",
+    "allow-play",
+    "allow-pause",
+    "allow-stop",
+    "allow-set-volume",
+]

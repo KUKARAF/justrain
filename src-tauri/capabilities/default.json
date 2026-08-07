@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default capability set for justrain.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "native-player:default"]
 }

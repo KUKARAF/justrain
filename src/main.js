@@ -1,8 +1,8 @@
 /* justrain — vanilla port of Rain.dc.html.
    Canvas rain + thunder flash ported verbatim from the design's tick loop.
-   Audio is downloaded once from the CDN (Rust side), cached, then played as a
-   streaming <audio> element (loop). We avoid Web Audio decodeAudioData because
-   decoding a ~15 MB MP3 to PCM OOMs on mobile; <audio> streams from disk. */
+   Audio is downloaded once (Rust), then played NATIVELY via a Media3
+   (ExoPlayer + MediaSessionService) plugin so it has a media notification and
+   keeps playing with the screen off. The webview is just the UI + controller. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,6 +10,7 @@ const AUDIO_URL = "https://rain.osmosis.page/rain-loop-long.mp3";
 const TAURI = window.__TAURI__;
 const invoke = TAURI ? TAURI.core.invoke : null;
 const listen = TAURI ? TAURI.event.listen : null;
+const NP = "plugin:native-player|";
 
 const state = {
   playing: true, vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
@@ -88,8 +89,8 @@ function tick(t) {
   }
 }
 
-/* ─────────────────────────── audio engine (<audio> element) ─────────────────────────── */
-let audioEl = null, audioObjUrl = null, audioReady = false, startedOnce = false, fadeRAF = null;
+/* ─────────────────────────── native audio ─────────────────────────── */
+let audioReady = false, startedOnce = false, fadeTimer = null, curVol = 0;
 
 function targetVol() {
   if (!state.playing) return 0;
@@ -97,49 +98,47 @@ function targetVol() {
   if (state.timer > 0 && state.remaining < 60) g *= Math.max(0, state.remaining / 60);
   return Math.max(0, Math.min(1, g));
 }
-function cancelFade() { if (fadeRAF) { cancelAnimationFrame(fadeRAF); fadeRAF = null; } }
-function fadeTo(target, ms) {
-  if (!audioEl) return;
-  cancelFade();
-  target = Math.max(0, Math.min(1, target));
-  if (ms <= 0) { audioEl.volume = target; return; }
-  const start = audioEl.volume, t0 = performance.now();
-  const stepFn = (now) => {
-    const k = Math.min(1, (now - t0) / ms);
-    audioEl.volume = start + (target - start) * k;
-    fadeRAF = k < 1 ? requestAnimationFrame(stepFn) : null;
-  };
-  fadeRAF = requestAnimationFrame(stepFn);
+function clearFade() { if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; } }
+async function npSetVol(v) {
+  curVol = Math.max(0, Math.min(1, v));
+  try { await invoke(NP + "set_volume", { volume: curVol }); } catch (_) {}
 }
-function setVolImmediate() { cancelFade(); if (audioEl) audioEl.volume = targetVol(); }
+function fadeTo(target, ms) {
+  clearFade();
+  target = Math.max(0, Math.min(1, target));
+  if (ms <= 0) { npSetVol(target); return; }
+  const start = curVol, steps = Math.max(1, Math.round(ms / 120)), stepMs = ms / steps;
+  let i = 0;
+  fadeTimer = setInterval(() => {
+    i++; const k = Math.min(1, i / steps);
+    npSetVol(start + (target - start) * k);
+    if (k >= 1) clearFade();
+  }, stepMs);
+}
+function setVolImmediate() { clearFade(); npSetVol(targetVol()); }
+async function npPlay() { try { await invoke(NP + "play"); } catch (e) { console.error("native play failed:", e); } }
+async function npPause() { try { await invoke(NP + "pause"); } catch (_) {} }
 
-// Reflect state.playing onto the <audio> element (with a soft/quick fade).
-function applyPlayState() {
-  if (!audioEl) return;
+// Reflect state.playing onto the native player, with a soft/quick fade.
+async function applyPlayState() {
+  if (!audioReady) return;
   if (state.playing) {
     const tgt = targetVol();
     const soft = state.softStart && !startedOnce;
-    // start from an audible floor so playback is heard immediately
-    if (soft) audioEl.volume = Math.min(tgt, tgt * 0.25);
-    audioEl.play()
-      .then(() => { startedOnce = true; fadeTo(tgt, soft ? 18000 : 400); })
-      .catch((e) => console.error("audio play() failed:", e));
+    await npSetVol(soft ? Math.min(tgt, tgt * 0.25) : tgt);   // set volume before play, no blip
+    await npPlay();
+    startedOnce = true;
+    fadeTo(tgt, soft ? 18000 : 400);
   } else {
     fadeTo(0, 600);
-    setTimeout(() => { if (!state.playing && audioEl) audioEl.pause(); }, 650);
+    setTimeout(() => { if (!state.playing) npPause(); }, 700);
   }
 }
 
-// Build the <audio> element from the cached bytes via a blob URL (streamed).
-async function initAudioElement() {
-  if (audioEl) return;
-  const bytes = await invoke("load_audio");           // ArrayBuffer
-  const blob = new Blob([bytes], { type: "audio/mpeg" });
-  audioObjUrl = URL.createObjectURL(blob);
-  audioEl = new Audio(audioObjUrl);
-  audioEl.loop = true;
-  audioEl.preload = "auto";
-  audioEl.volume = 0;
+// Point the native player at the cached local file.
+async function nativeLoad() {
+  const uri = await invoke("audio_file_uri");
+  await invoke(NP + "load", { path: uri });
   audioReady = true;
 }
 
@@ -181,8 +180,7 @@ async function startDownload() {
   if (un) un();
   hideFirstRun();
   downloading = false;
-  try { await initAudioElement(); } catch (e) { console.error(e); }
-  applyPlayState();
+  try { await nativeLoad(); await applyPlayState(); } catch (e) { console.error(e); }
 }
 
 // Boot: use the cached audio if present, else prompt to download it.
@@ -193,37 +191,18 @@ async function bootAudio() {
   catch (e) { console.error("audio_status failed", e); showFirstRun(0); return; }
   lastRemoteBytes = status.remote_bytes || 0;
   if (status.cached) {
-    try { await initAudioElement(); applyPlayState(); } catch (e) { console.error(e); }
+    try { await nativeLoad(); await applyPlayState(); } catch (e) { console.error(e); }
   } else {
     showFirstRun(status.remote_bytes);
   }
 }
 
-/* ─────────────────────────── screen wake lock ─────────────────────────── */
-let wakeLock = null;
-async function updateWakeLock() {
-  try {
-    if (state.playing && "wakeLock" in navigator) {
-      if (!wakeLock) wakeLock = await navigator.wakeLock.request("screen");
-    } else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
-  } catch (_) { wakeLock = null; }
-}
+// "keep playing when locked": when off, pause on background and resume on return.
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.playing) updateWakeLock();
+  if (!audioReady || state.background) return;
+  if (document.hidden) { if (state.playing) npPause(); }
+  else if (state.playing) { npPlay(); setVolImmediate(); }
 });
-
-/* ─────────────────────────── media session ─────────────────────────── */
-function initMediaSession() {
-  if (!("mediaSession" in navigator)) return;
-  try {
-    navigator.mediaSession.metadata = new MediaMetadata({ title: "Rain", artist: "justrain", album: "justrain" });
-    navigator.mediaSession.setActionHandler("play", () => { if (!state.playing) togglePlay(); });
-    navigator.mediaSession.setActionHandler("pause", () => { if (state.playing) togglePlay(); });
-  } catch (_) {}
-}
-function updateMediaSession() {
-  if ("mediaSession" in navigator) navigator.mediaSession.playbackState = state.playing ? "playing" : "paused";
-}
 
 /* ─────────────────────────── helpers (ported) ─────────────────────────── */
 function fmt(s) { const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + String(r).padStart(2, "0"); }
@@ -239,12 +218,10 @@ function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = tru
 function togglePlay() {
   idleAt = Date.now();
   if (needsDownload()) { showFirstRun(lastRemoteBytes); return; }
-  // if we're nominally "playing" but the element is paused/silent, a tap starts it
-  const silentButPlaying = state.playing && (!audioEl || audioEl.paused);
-  if (!silentButPlaying) state.playing = !state.playing;
+  state.playing = !state.playing;
   state.chrome = true;
   applyPlayState();
-  updateWakeLock(); updateMediaSession(); render();
+  render();
 }
 function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; render(); }
 function setTimer(m) {
@@ -252,7 +229,7 @@ function setTimer(m) {
   state.timer = m; state.remaining = m * 60; state.sheet = null;
   if (m > 0) state.playing = true;
   applyPlayState();
-  updateWakeLock(); updateMediaSession(); render();
+  render();
 }
 function toggleSetting(key) {
   state[key] = !state[key];
@@ -370,7 +347,7 @@ setInterval(() => {
     if (s.timer > 0) {
       s.remaining = Math.max(0, s.remaining - 1);
       if (s.remaining < 60) setVolImmediate();       // track the rain-fade over the last minute
-      if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; applyPlayState(); updateWakeLock(); updateMediaSession(); }
+      if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; applyPlayState(); }
     }
     render();
   }
@@ -392,17 +369,7 @@ $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVo
 $("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
 $("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
 
-// insurance: if audio is meant to be playing but the element is paused, kick it on first tap
-function firstGesture() {
-  if (state.playing && audioEl && audioEl.paused) applyPlayState();
-  window.removeEventListener("pointerdown", firstGesture);
-  window.removeEventListener("touchstart", firstGesture);
-}
-window.addEventListener("pointerdown", firstGesture);
-window.addEventListener("touchstart", firstGesture);
-
 buildLists();
-initMediaSession();
 $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");
 render();
 requestAnimationFrame(tick);
