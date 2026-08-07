@@ -22,8 +22,21 @@ const state = {
 let idleAt = Date.now();
 
 /* surface failures instead of swallowing them */
-function showError(msg) {
-  console.error("[justrain]", msg);
+// Tauri/plugin rejections often arrive as objects ({message: "..."}), not
+// strings — naive string concatenation turns those into "[object Object]".
+function errText(e) {
+  if (e == null) return "unknown error";
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  if (typeof e === "object") {
+    if (typeof e.message === "string") return e.message;
+    if (typeof e.error === "string") return e.error;
+    try { return JSON.stringify(e); } catch (_) { /* fall through */ }
+  }
+  return String(e);
+}
+function showError(msg, raw) {
+  console.error("[justrain]", msg, raw !== undefined ? raw : "");
   const el = $("errmsg"); if (el) el.textContent = String(msg);
   const bar = $("errbar"); if (bar) bar.classList.add("show");
 }
@@ -115,7 +128,7 @@ async function npSetVol(v) {
   try { await invoke(NP + "set_volume", { volume: curVol }); }
   catch (e) {
     console.error("[justrain] set_volume", e);
-    if (!volErrShown) { volErrShown = true; showError("volume control failed: " + e); }
+    if (!volErrShown) { volErrShown = true; showError("volume control failed: " + errText(e), e); }
   }
 }
 function fadeTo(target, ms) {
@@ -133,11 +146,11 @@ function fadeTo(target, ms) {
 function setVolImmediate() { clearFade(); npSetVol(targetVol()); }
 async function npPlay() {
   try { await invoke(NP + "play"); return true; }
-  catch (e) { showError("play failed: " + e); return false; }
+  catch (e) { showError("play failed: " + errText(e), e); return false; }
 }
 async function npPause() {
   try { await invoke(NP + "pause"); }
-  catch (e) { showError("pause failed: " + e); }
+  catch (e) { showError("pause failed: " + errText(e), e); }
 }
 
 // Reflect state.playing onto the native player, with a soft/quick fade.
@@ -204,7 +217,7 @@ async function startDownload() {
   downloading = false;
   state.hasFile = true;
   try { await loadAndPlay(); }
-  catch (e) { showError("downloaded, but couldn't start audio: " + e); }
+  catch (e) { showError("downloaded, but couldn't start audio: " + errText(e), e); }
 }
 
 // Load the cached file into the native player and start it. Surfaces failures.
@@ -224,12 +237,13 @@ async function bootAudio() {
 
   let cached = false;
   try { cached = await invoke("audio_cached"); }
-  catch (e) { showError("cache check failed: " + e); return; }
+  catch (e) { showError("cache check failed: " + errText(e), e); return; }
   state.hasFile = cached;
+  render();   // reflect hasFile immediately, independent of whether load below succeeds
 
   if (cached) {
     try { await loadAndPlay(); }
-    catch (e) { showError("couldn't start audio: " + e); }
+    catch (e) { showError("couldn't start audio: " + errText(e), e); render(); }
   } else {
     showFirstRun(0);           // prompt immediately; fill in the size once the HEAD returns
     invoke("audio_remote_size", { url: AUDIO_URL })
@@ -262,7 +276,7 @@ function togglePlay() {
   if (!state.hasFile) return;
   if (!audioReady) {                          // file present but not loaded → (re)try loading
     hideError();
-    loadAndPlay().catch((e) => showError("couldn't start audio: " + e));
+    loadAndPlay().catch((e) => showError("couldn't start audio: " + errText(e), e));
     return;
   }
   state.playing = !state.playing;             // normal play/pause
