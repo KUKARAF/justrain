@@ -229,3 +229,10 @@ body {
 .errbar.show { display: flex; }
 .errbar span { flex: 1; word-break: break-word; }
 .errbar button { flex: none; background: transparent; border: 0; color: #ffe9ec; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }
+
+/* play button is inert until the rain audio is downloaded; hint that visually */
+.play-btn.disabled { opacity: .45; cursor: default; }
+
+/* settings: download-rain row (only shown if the file is missing) */
+.row-download { margin-bottom: 10px; background: rgba(145,132,217,.10); border-color: rgba(145,132,217,.35); }
+.row-download .row-cta { font-size: 13px; color: var(--color-accent-200); }

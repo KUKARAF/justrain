@@ -257,10 +257,9 @@ function clock(minsFromNow) {
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
   idleAt = Date.now();
-  if (!state.hasFile) {                       // genuinely no file → download prompt
-    if (!downloading) showFirstRun(lastRemoteBytes);
-    return;
-  }
+  // The download is a one-time gate handled entirely at app start (bootAudio).
+  // The play button never triggers it — no surprise popup mid-session.
+  if (!state.hasFile) return;
   if (!audioReady) {                          // file present but not loaded → (re)try loading
     hideError();
     loadAndPlay().catch((e) => showError("couldn't start audio: " + e));
@@ -343,13 +342,17 @@ function render() {
   const s = state;
   const show = s.chrome || !s.playing;
 
-  $("stateWord").textContent = s.playing ? "raining" : "paused";
+  $("stateWord").textContent = !s.hasFile ? "no rain yet" : (s.playing ? "raining" : "paused");
   $("bigTime").textContent = s.timer > 0 ? fmt(s.remaining) : fmt(s.elapsed);
-  $("bigLabel").textContent = s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held");
+  $("bigLabel").textContent = !s.hasFile
+    ? "download in settings"
+    : (s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held"));
 
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
   $("playBtn").style.paddingLeft = s.playing ? "0" : "5px";
+  $("playBtn").classList.toggle("disabled", !s.hasFile);
+  $("dlRow").style.display = s.hasFile ? "none" : "flex";
 
   $("volFill").style.width = (s.vol * 100) + "%";
   $("volKnob").style.left = (s.vol * 100) + "%";
@@ -417,6 +420,8 @@ $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVo
 $("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
 $("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
 $("errclose").addEventListener("click", (e) => { e.stopPropagation(); hideError(); });
+// explicit, user-initiated retry — the only place besides app-start that opens the download prompt
+$("dlRow").addEventListener("click", (e) => { e.stopPropagation(); showFirstRun(lastRemoteBytes); });
 
 buildLists();
 $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");
