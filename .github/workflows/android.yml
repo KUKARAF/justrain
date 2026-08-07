@@ -72,6 +72,16 @@ jobs:
         with:
           workspaces: src-tauri
 
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Install Tauri CLI (v2)
         run: cargo install tauri-cli --version "^2" --locked
 
@@ -90,7 +100,16 @@ jobs:
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "${RUNNER_TEMP}/release.jks"
 
       - name: Build signed APK
-        run: cargo tauri android build --apk
+        run: |
+          set -uo pipefail
+          n=0
+          until [ "$n" -ge 3 ]; do
+            if cargo tauri android build --apk; then exit 0; fi
+            n=$((n + 1))
+            echo "::warning::build attempt $n failed (often a transient Maven 429); retrying in 30s"
+            sleep 30
+          done
+          echo "::error::build failed after 3 attempts"; exit 1
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
