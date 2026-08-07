@@ -1,12 +1,11 @@
 /* justrain — vanilla port of Rain.dc.html.
    Canvas rain + thunder flash ported verbatim from the design's tick loop.
-   Audio is downloaded once from the CDN on first run (Rust side), then cached
-   and played gaplessly via the Web Audio API. */
+   Audio is downloaded once from the CDN (Rust side), cached, then played as a
+   streaming <audio> element (loop). We avoid Web Audio decodeAudioData because
+   decoding a ~15 MB MP3 to PCM OOMs on mobile; <audio> streams from disk. */
 
 const $ = (id) => document.getElementById(id);
 
-// Remote rain loop — fetched once through Rust (avoids webview CORS), cached in
-// the app data dir, then played offline forever after.
 const AUDIO_URL = "https://rain.osmosis.page/rain-loop-long.mp3";
 const TAURI = window.__TAURI__;
 const invoke = TAURI ? TAURI.core.invoke : null;
@@ -89,80 +88,59 @@ function tick(t) {
   }
 }
 
-/* ─────────────────────────── audio engine ─────────────────────────── */
-let audioCtx = null, gainNode = null, source = null, buffer = null, audioReady = false;
+/* ─────────────────────────── audio engine (<audio> element) ─────────────────────────── */
+let audioEl = null, audioObjUrl = null, audioReady = false, startedOnce = false, fadeRAF = null;
 
-function ensureAudioContext() {
-  if (audioCtx) return;
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  gainNode = audioCtx.createGain();
-  gainNode.gain.value = 0;
-  gainNode.connect(audioCtx.destination);
-}
-function startSource() {
-  if (!audioReady || source) return;
-  source = audioCtx.createBufferSource();
-  source.buffer = buffer;
-  source.loop = true;              // the clip is crossfade-looped -> seamless
-  source.connect(gainNode);
-  source.start();
-}
-function stopSource() {
-  if (source) { try { source.stop(); } catch (_) {} source.disconnect(); source = null; }
-}
-function targetGain() {
+function targetVol() {
   if (!state.playing) return 0;
   let g = state.vol;
   if (state.timer > 0 && state.remaining < 60) g *= Math.max(0, state.remaining / 60);
-  return g;
+  return Math.max(0, Math.min(1, g));
 }
-function applyGain(seconds) {
-  if (!gainNode || !audioCtx) return;
-  const now = audioCtx.currentTime;
-  gainNode.gain.cancelScheduledValues(now);
-  gainNode.gain.setValueAtTime(Math.max(0.0001, gainNode.gain.value), now);
-  gainNode.gain.linearRampToValueAtTime(Math.max(0.0001, targetGain()), now + Math.max(0.02, seconds));
+function cancelFade() { if (fadeRAF) { cancelAnimationFrame(fadeRAF); fadeRAF = null; } }
+function fadeTo(target, ms) {
+  if (!audioEl) return;
+  cancelFade();
+  target = Math.max(0, Math.min(1, target));
+  if (ms <= 0) { audioEl.volume = target; return; }
+  const start = audioEl.volume, t0 = performance.now();
+  const stepFn = (now) => {
+    const k = Math.min(1, (now - t0) / ms);
+    audioEl.volume = start + (target - start) * k;
+    fadeRAF = k < 1 ? requestAnimationFrame(stepFn) : null;
+  };
+  fadeRAF = requestAnimationFrame(stepFn);
 }
-let pendingPlay = false;
+function setVolImmediate() { cancelFade(); if (audioEl) audioEl.volume = targetVol(); }
 
-// Fade the rain in. Soft-start begins from an audible floor (not silence) so
-// playback is heard immediately, then rises to full over ~18s.
-function fadeIn() {
-  if (!gainNode || !audioCtx) return;
-  const now = audioCtx.currentTime;
-  const t = Math.max(0.0001, targetGain());
-  gainNode.gain.cancelScheduledValues(now);
-  if (state.softStart) {
-    gainNode.gain.setValueAtTime(Math.max(0.0001, t * 0.22), now);
-    gainNode.gain.linearRampToValueAtTime(t, now + 18);
+// Reflect state.playing onto the <audio> element (with a soft/quick fade).
+function applyPlayState() {
+  if (!audioEl) return;
+  if (state.playing) {
+    const tgt = targetVol();
+    const soft = state.softStart && !startedOnce;
+    // start from an audible floor so playback is heard immediately
+    if (soft) audioEl.volume = Math.min(tgt, tgt * 0.25);
+    audioEl.play()
+      .then(() => { startedOnce = true; fadeTo(tgt, soft ? 18000 : 400); })
+      .catch((e) => console.error("audio play() failed:", e));
   } else {
-    gainNode.gain.setValueAtTime(Math.max(0.0001, gainNode.gain.value), now);
-    gainNode.gain.linearRampToValueAtTime(t, now + 0.4);
+    fadeTo(0, 600);
+    setTimeout(() => { if (!state.playing && audioEl) audioEl.pause(); }, 650);
   }
 }
 
-// Start the loop only when the context is actually running — Android WebView
-// keeps AudioContext suspended until a user gesture. Otherwise defer.
-function maybeStartPlayback() {
-  if (!audioReady || !state.playing) return;
-  if (!audioCtx || audioCtx.state !== "running") { pendingPlay = true; return; }
-  if (!source) { startSource(); fadeIn(); }
-  pendingPlay = false;
-}
-
-async function resumeAudio() {
-  if (audioCtx && audioCtx.state === "suspended") { try { await audioCtx.resume(); } catch (_) {} }
-  if (pendingPlay) maybeStartPlayback();
-}
-
-// Decode the cached bytes and start the loop as soon as allowed.
-async function loadCachedAudio() {
-  ensureAudioContext();
+// Build the <audio> element from the cached bytes via a blob URL (streamed).
+async function initAudioElement() {
+  if (audioEl) return;
   const bytes = await invoke("load_audio");           // ArrayBuffer
-  const ab = bytes instanceof ArrayBuffer ? bytes : (bytes.buffer || bytes);
-  buffer = await audioCtx.decodeAudioData(ab);
+  const blob = new Blob([bytes], { type: "audio/mpeg" });
+  audioObjUrl = URL.createObjectURL(blob);
+  audioEl = new Audio(audioObjUrl);
+  audioEl.loop = true;
+  audioEl.preload = "auto";
+  audioEl.volume = 0;
   audioReady = true;
-  maybeStartPlayback();
 }
 
 /* ─── first-run download flow ─── */
@@ -187,7 +165,6 @@ async function startDownload() {
   btn.disabled = true; btn.textContent = "downloading…";
   $("frError").classList.remove("show");
   $("frProgWrap").style.display = "block";
-  ensureAudioContext(); resumeAudio();
 
   let un = null;
   if (listen) un = await listen("download-progress", (e) => setProgress(e.payload[0], e.payload[1]));
@@ -204,20 +181,22 @@ async function startDownload() {
   if (un) un();
   hideFirstRun();
   downloading = false;
-  await loadCachedAudio();
-  resumeAudio();
+  try { await initAudioElement(); } catch (e) { console.error(e); }
+  applyPlayState();
 }
 
-// Boot: use the cached audio if present, otherwise prompt to download it.
+// Boot: use the cached audio if present, else prompt to download it.
 async function bootAudio() {
-  ensureAudioContext();
   if (!invoke) { console.warn("not running under Tauri; audio unavailable"); return; }
   let status;
   try { status = await invoke("audio_status", { url: AUDIO_URL }); }
   catch (e) { console.error("audio_status failed", e); showFirstRun(0); return; }
   lastRemoteBytes = status.remote_bytes || 0;
-  if (status.cached) { try { await loadCachedAudio(); } catch (e) { console.error(e); } }
-  else { showFirstRun(status.remote_bytes); }
+  if (status.cached) {
+    try { await initAudioElement(); applyPlayState(); } catch (e) { console.error(e); }
+  } else {
+    showFirstRun(status.remote_bytes);
+  }
 }
 
 /* ─────────────────────────── screen wake lock ─────────────────────────── */
@@ -259,17 +238,12 @@ function needsDownload() { return !audioReady && !downloading; }
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
   idleAt = Date.now();
-  // can't start rain we don't have yet — surface the download prompt instead
   if (needsDownload()) { showFirstRun(lastRemoteBytes); return; }
-  // If we're nominally "playing" but no sound is out yet (context suspended /
-  // fresh launch), a tap should START it rather than pause it.
-  const silentButPlaying = state.playing && (!source || !audioCtx || audioCtx.state !== "running");
+  // if we're nominally "playing" but the element is paused/silent, a tap starts it
+  const silentButPlaying = state.playing && (!audioEl || audioEl.paused);
   if (!silentButPlaying) state.playing = !state.playing;
   state.chrome = true;
-  resumeAudio().then(() => {
-    if (state.playing) { if (!source) maybeStartPlayback(); else fadeIn(); }
-    else applyGain(0.6);
-  });
+  applyPlayState();
   updateWakeLock(); updateMediaSession(); render();
 }
 function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; render(); }
@@ -277,10 +251,7 @@ function setTimer(m) {
   idleAt = Date.now();
   state.timer = m; state.remaining = m * 60; state.sheet = null;
   if (m > 0) state.playing = true;
-  resumeAudio().then(() => {
-    if (state.playing) { if (!source) maybeStartPlayback(); else applyGain(0.4); }
-    else applyGain(0.6);
-  });
+  applyPlayState();
   updateWakeLock(); updateMediaSession(); render();
 }
 function toggleSetting(key) {
@@ -299,7 +270,7 @@ function onVolDown(e) {
     const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
     idleAt = Date.now();
     state.vol = Math.max(0, Math.min(1, (x - r.left) / r.width));
-    applyGain(0.1); render();
+    setVolImmediate(); render();
   };
   move(e);
   const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
@@ -398,8 +369,8 @@ setInterval(() => {
     s.elapsed += 1;
     if (s.timer > 0) {
       s.remaining = Math.max(0, s.remaining - 1);
-      if (s.remaining < 60) applyGain(1.0);
-      if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; stopSource(); updateWakeLock(); updateMediaSession(); }
+      if (s.remaining < 60) setVolImmediate();       // track the rain-fade over the last minute
+      if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; applyPlayState(); updateWakeLock(); updateMediaSession(); }
     }
     render();
   }
@@ -421,7 +392,12 @@ $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVo
 $("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
 $("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
 
-function firstGesture() { resumeAudio(); window.removeEventListener("pointerdown", firstGesture); window.removeEventListener("touchstart", firstGesture); }
+// insurance: if audio is meant to be playing but the element is paused, kick it on first tap
+function firstGesture() {
+  if (state.playing && audioEl && audioEl.paused) applyPlayState();
+  window.removeEventListener("pointerdown", firstGesture);
+  window.removeEventListener("touchstart", firstGesture);
+}
 window.addEventListener("pointerdown", firstGesture);
 window.addEventListener("touchstart", firstGesture);
 

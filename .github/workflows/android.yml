@@ -96,6 +96,12 @@ jobs:
       - name: Patch gen/android (signing + version override)
         run: python3 .github/scripts/patch_gradle.py
 
+      - name: Patch Android WebView (enable audio autoplay)
+        run: |
+          python3 .github/scripts/patch_android.py
+          echo "--- MainActivity.kt ---"
+          find src-tauri/gen/android -name MainActivity.kt -exec cat {} \;
+
       - name: Decode keystore
         run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "${RUNNER_TEMP}/release.jks"
 
