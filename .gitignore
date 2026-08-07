@@ -1,0 +1,19 @@
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# generated keystores / secrets — never commit
+*.jks
+*.keystore
+keystore.properties
+*.base64
+
+# node (frontend has none, but guard anyway)
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# production audio masters (kept out of the app repo; app ships src/assets/rain.ogg)
+/assets/

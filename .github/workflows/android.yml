@@ -1,0 +1,130 @@
+name: Android
+
+on:
+  push:
+    branches: ["**"]        # any branch push -> signed prerelease
+    tags: ["*.*.*"]         # <shortsha>.<MAJOR>.<MINOR> e.g. a1b2c3d.00.01 -> signed release
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: "27.0.12077973"
+      BUILD_TOOLS_VERSION: "34.0.0"
+
+    steps:
+      - name: Checkout (full history for versionCode)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version / tag / prerelease
+        id: vars
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+            TAG_NAME="${GITHUB_REF_NAME}"
+            PRERELEASE="false"
+          else
+            VERSION="${SHORT_SHA}"
+            TAG_NAME="pre-${SHORT_SHA}"
+            PRERELEASE="true"
+          fi
+          {
+            echo "short_sha=${SHORT_SHA}"
+            echo "version=${VERSION}"
+            echo "version_code=${VERSION_CODE}"
+            echo "tag_name=${TAG_NAME}"
+            echo "prerelease=${PRERELEASE}"
+            echo "asset_name=justrain-${VERSION}.apk"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK + build-tools
+        run: sdkmanager --install "ndk;${NDK_VERSION}" "build-tools;${BUILD_TOOLS_VERSION}" "platform-tools"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Tauri CLI (v2)
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Generate app icons
+        run: cargo tauri icon src-tauri/icons/icon.png
+
+      - name: Initialize Android project
+        run: cargo tauri android init
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+
+      - name: Patch gen/android (signing + version override)
+        run: python3 .github/scripts/patch_gradle.py
+
+      - name: Decode keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "${RUNNER_TEMP}/release.jks"
+
+      - name: Build signed APK
+        run: cargo tauri android build --apk
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_SIGNING_STORE_PASSWORD }}
+          ANDROID_SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_SIGNING_KEY_ALIAS }}
+          ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_SIGNING_KEY_PASSWORD }}
+          TAURI_ANDROID_VERSION_CODE: ${{ steps.vars.outputs.version_code }}
+          TAURI_ANDROID_VERSION_NAME: ${{ steps.vars.outputs.version }}
+
+      - name: Locate & rename APK
+        id: apk
+        run: |
+          set -euo pipefail
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk/universal/release \
+                   -name '*.apk' ! -name '*unsigned*' | head -n1)"
+          if [[ -z "${APK}" ]]; then
+            echo "No signed APK found:"; find src-tauri/gen/android -name '*.apk'; exit 1
+          fi
+          OUT="${RUNNER_TEMP}/${{ steps.vars.outputs.asset_name }}"
+          cp "${APK}" "${OUT}"
+          echo "path=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify signature
+        run: |
+          APKSIGNER="$(find "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" -name apksigner | head -n1)"
+          "${APKSIGNER}" verify --verbose "${{ steps.apk.outputs.path }}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.tag_name }}
+          name: ${{ steps.vars.outputs.tag_name }}
+          prerelease: ${{ steps.vars.outputs.prerelease }}
+          make_latest: ${{ steps.vars.outputs.prerelease == 'false' }}
+          files: ${{ steps.apk.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
