@@ -8,6 +8,9 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- error banner: surfaces native/playback failures instead of failing silently -->
+<div id="errbar" class="errbar"><span id="errmsg"></span><button id="errclose" aria-label="dismiss">×</button></div>
+
 <!-- Root screen: radial night sky, breathing glow, rain canvas, vignette, then the UI column. -->
 <div id="screen">
   <div id="glow"></div>

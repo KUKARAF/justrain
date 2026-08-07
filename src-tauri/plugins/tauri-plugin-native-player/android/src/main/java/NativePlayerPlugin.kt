@@ -95,7 +95,8 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
     fun setVolume(invoke: Invoke) {
         val args = invoke.parseArgs(VolumeArgs::class.java)
         withController { c ->
-            if (c != null) c.volume = args.volume.coerceIn(0f, 1f)
+            if (c == null) { invoke.reject("player unavailable"); return@withController }
+            c.volume = args.volume.coerceIn(0f, 1f)
             invoke.resolve()
         }
     }

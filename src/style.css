@@ -216,3 +216,16 @@ body {
 .fr-btn:disabled { opacity: .5; cursor: default; }
 .fr-later { margin-top: 12px; background: transparent; border: 0; cursor: pointer; font-family: var(--font-body); font-size: 12.5px; color: rgba(233,233,237,.4); }
 .fr-later:hover { color: rgba(233,233,237,.65); }
+
+/* ── error banner ── */
+.errbar {
+  position: fixed; left: 0; right: 0; top: 0; z-index: 40;
+  display: none; align-items: center; gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+  background: rgba(120, 30, 40, 0.96); color: #ffe9ec;
+  font-family: var(--font-body); font-size: 12.5px; line-height: 1.4;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5);
+}
+.errbar.show { display: flex; }
+.errbar span { flex: 1; word-break: break-word; }
+.errbar button { flex: none; background: transparent; border: 0; color: #ffe9ec; font-size: 20px; line-height: 1; cursor: pointer; padding: 0 4px; }

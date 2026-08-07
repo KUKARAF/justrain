@@ -13,11 +13,21 @@ const listen = TAURI ? TAURI.event.listen : null;
 const NP = "plugin:native-player|";
 
 const state = {
-  playing: true, vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
+  playing: false,          // becomes true only once audio is actually loaded & started
+  hasFile: false,          // is the rain audio downloaded to disk?
+  vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
   sheet: null, chrome: true,
   thunder: true, softStart: true, background: true, dim: false,
 };
 let idleAt = Date.now();
+
+/* surface failures instead of swallowing them */
+function showError(msg) {
+  console.error("[justrain]", msg);
+  const el = $("errmsg"); if (el) el.textContent = String(msg);
+  const bar = $("errbar"); if (bar) bar.classList.add("show");
+}
+function hideError() { const bar = $("errbar"); if (bar) bar.classList.remove("show"); }
 
 /* ─────────────────────────── canvas rain ─────────────────────────── */
 const canvas = $("rain");
@@ -99,9 +109,14 @@ function targetVol() {
   return Math.max(0, Math.min(1, g));
 }
 function clearFade() { if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; } }
+let volErrShown = false;
 async function npSetVol(v) {
   curVol = Math.max(0, Math.min(1, v));
-  try { await invoke(NP + "set_volume", { volume: curVol }); } catch (_) {}
+  try { await invoke(NP + "set_volume", { volume: curVol }); }
+  catch (e) {
+    console.error("[justrain] set_volume", e);
+    if (!volErrShown) { volErrShown = true; showError("volume control failed: " + e); }
+  }
 }
 function fadeTo(target, ms) {
   clearFade();
@@ -116,8 +131,14 @@ function fadeTo(target, ms) {
   }, stepMs);
 }
 function setVolImmediate() { clearFade(); npSetVol(targetVol()); }
-async function npPlay() { try { await invoke(NP + "play"); } catch (e) { console.error("native play failed:", e); } }
-async function npPause() { try { await invoke(NP + "pause"); } catch (_) {} }
+async function npPlay() {
+  try { await invoke(NP + "play"); return true; }
+  catch (e) { showError("play failed: " + e); return false; }
+}
+async function npPause() {
+  try { await invoke(NP + "pause"); }
+  catch (e) { showError("pause failed: " + e); }
+}
 
 // Reflect state.playing onto the native player, with a soft/quick fade.
 async function applyPlayState() {
@@ -166,7 +187,8 @@ async function startDownload() {
   $("frProgWrap").style.display = "block";
 
   let un = null;
-  if (listen) un = await listen("download-progress", (e) => setProgress(e.payload[0], e.payload[1]));
+  try { if (listen) un = await listen("download-progress", (e) => setProgress(e.payload[0], e.payload[1])); }
+  catch (e) { console.error("[justrain] progress listener", e); }
   try {
     await invoke("download_audio", { url: AUDIO_URL });
   } catch (e) {
@@ -180,20 +202,39 @@ async function startDownload() {
   if (un) un();
   hideFirstRun();
   downloading = false;
-  try { await nativeLoad(); await applyPlayState(); } catch (e) { console.error(e); }
+  state.hasFile = true;
+  try { await loadAndPlay(); }
+  catch (e) { showError("downloaded, but couldn't start audio: " + e); }
+}
+
+// Load the cached file into the native player and start it. Surfaces failures.
+async function loadAndPlay() {
+  await nativeLoad();          // throws (and we surface) if the native player can't load it
+  state.playing = true;
+  await applyPlayState();
+  render();
 }
 
 // Boot: use the cached audio if present, else prompt to download it.
 async function bootAudio() {
-  if (!invoke) { console.warn("not running under Tauri; audio unavailable"); return; }
-  let status;
-  try { status = await invoke("audio_status", { url: AUDIO_URL }); }
-  catch (e) { console.error("audio_status failed", e); showFirstRun(0); return; }
-  lastRemoteBytes = status.remote_bytes || 0;
-  if (status.cached) {
-    try { await nativeLoad(); await applyPlayState(); } catch (e) { console.error(e); }
+  if (!invoke) { showError("not running under Tauri — audio unavailable"); return; }
+  // log the resolved cache path (visible in `adb logcat` via the WebView console)
+  try { console.log("[justrain] cache:", JSON.stringify(await invoke("audio_debug"))); }
+  catch (e) { console.error("[justrain] audio_debug", e); }
+
+  let cached = false;
+  try { cached = await invoke("audio_cached"); }
+  catch (e) { showError("cache check failed: " + e); return; }
+  state.hasFile = cached;
+
+  if (cached) {
+    try { await loadAndPlay(); }
+    catch (e) { showError("couldn't start audio: " + e); }
   } else {
-    showFirstRun(status.remote_bytes);
+    showFirstRun(0);           // prompt immediately; fill in the size once the HEAD returns
+    invoke("audio_remote_size", { url: AUDIO_URL })
+      .then((sz) => { lastRemoteBytes = sz || 0; if (sz > 0) $("frSize").textContent = "~" + Math.round(sz / 1048576) + " MB"; })
+      .catch((e) => console.error("[justrain] remote_size", e));
   }
 }
 
@@ -213,12 +254,19 @@ function clock(minsFromNow) {
 }
 
 /* ─────────────────────────── actions ─────────────────────────── */
-function needsDownload() { return !audioReady && !downloading; }
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
   idleAt = Date.now();
-  if (needsDownload()) { showFirstRun(lastRemoteBytes); return; }
-  state.playing = !state.playing;
+  if (!state.hasFile) {                       // genuinely no file → download prompt
+    if (!downloading) showFirstRun(lastRemoteBytes);
+    return;
+  }
+  if (!audioReady) {                          // file present but not loaded → (re)try loading
+    hideError();
+    loadAndPlay().catch((e) => showError("couldn't start audio: " + e));
+    return;
+  }
+  state.playing = !state.playing;             // normal play/pause
   state.chrome = true;
   applyPlayState();
   render();
@@ -227,7 +275,7 @@ function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; 
 function setTimer(m) {
   idleAt = Date.now();
   state.timer = m; state.remaining = m * 60; state.sheet = null;
-  if (m > 0) state.playing = true;
+  if (m > 0 && state.hasFile && audioReady) state.playing = true;
   applyPlayState();
   render();
 }
@@ -368,6 +416,7 @@ $("backdrop").addEventListener("click", closeSheet);
 $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVolDown(e); });
 $("frDownload").addEventListener("click", (e) => { e.stopPropagation(); startDownload(); });
 $("frLater").addEventListener("click", (e) => { e.stopPropagation(); hideFirstRun(); });
+$("errclose").addEventListener("click", (e) => { e.stopPropagation(); hideError(); });
 
 buildLists();
 $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");

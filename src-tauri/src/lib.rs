@@ -22,33 +22,47 @@ fn app_info() -> AppInfo {
     }
 }
 
-#[derive(serde::Serialize)]
-struct AudioStatus {
-    cached: bool,
-    bytes: u64,
-    remote_bytes: u64,
-}
-
-/// Report whether the rain audio is already cached locally, and — if not — the
-/// size of the remote file (via a HEAD request) so the UI can ask the user to
-/// confirm the download.
+/// Fast local check: is the rain audio already downloaded and non-empty?
 #[tauri::command]
-async fn audio_status(app: tauri::AppHandle, url: String) -> Result<AudioStatus, String> {
+fn audio_cached(app: tauri::AppHandle) -> Result<bool, String> {
     let path = audio_path(&app)?;
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let cached = path.exists() && bytes > 0;
-    let remote_bytes = if cached {
-        bytes
-    } else {
-        reqwest::Client::new()
-            .head(&url)
-            .send()
-            .await
-            .ok()
-            .and_then(|r| r.content_length())
-            .unwrap_or(0)
-    };
-    Ok(AudioStatus { cached, bytes, remote_bytes })
+    Ok(path.exists() && bytes > 0)
+}
+
+/// Size of the remote file (HEAD) so the UI can show "download ~N MB".
+/// Returns an error (surfaced to the UI) rather than silently defaulting.
+#[tauri::command]
+async fn audio_remote_size(url: String) -> Result<u64, String> {
+    let resp = reqwest::Client::new()
+        .head(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("server returned {}", resp.status()));
+    }
+    Ok(resp.content_length().unwrap_or(0))
+}
+
+#[derive(serde::Serialize)]
+struct AudioDebug {
+    path: String,
+    exists: bool,
+    size: u64,
+}
+
+/// Diagnostic: the resolved cache path + whether the file is present. Logged to
+/// the webview console so it surfaces in `adb logcat`.
+#[tauri::command]
+fn audio_debug(app: tauri::AppHandle) -> Result<AudioDebug, String> {
+    let path = audio_path(&app)?;
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    Ok(AudioDebug {
+        path: path.to_string_lossy().into_owned(),
+        exists: path.exists() && size > 0,
+        size,
+    })
 }
 
 /// Download the rain audio to the app data dir, emitting `download-progress`
@@ -107,7 +121,9 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             app_info,
-            audio_status,
+            audio_cached,
+            audio_remote_size,
+            audio_debug,
             download_audio,
             audio_file_uri
         ])
