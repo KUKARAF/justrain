@@ -36,7 +36,7 @@ object PcmStore {
     // sample count — then the samples themselves.
     private const val CACHE_MAGIC = 0x4D504331 // "MPC1"
     private const val CACHE_HEADER_BYTES = 5 * 4
-    private const val ASSET_PATH = "rain-loop-long.ogg"
+    private const val ASSET_PATH = "rain-loop.ogg"
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val decodeDispatcher = Dispatchers.IO.limitedParallelism(1)
