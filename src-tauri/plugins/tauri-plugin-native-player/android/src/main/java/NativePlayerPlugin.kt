@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
+import android.webkit.WebView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
@@ -18,6 +20,8 @@ import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
+
+private const val TAG = "NativePlayerPlugin"
 
 @InvokeArg
 class VolumeArgs {
@@ -38,15 +42,27 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             playback = (binder as? PlaybackService.LocalBinder)?.service
+            Log.i(TAG, "onServiceConnected, playback=$playback")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.w(TAG, "onServiceDisconnected")
             playback = null
         }
     }
 
-    init {
-        val intent = Intent(activity, PlaybackService::class.java).setAction(PlaybackService.CONTROL_ACTION)
-        activity.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    // Bind here (not in the constructor/init block): if binding threw during
+    // construction, Tauri's plugin loader would silently drop the whole
+    // plugin, and every future invoke would permanently reject with
+    // "not initialized" no matter how many times we retry.
+    override fun load(webView: WebView) {
+        super.load(webView)
+        try {
+            val intent = Intent(activity, PlaybackService::class.java).setAction(PlaybackService.CONTROL_ACTION)
+            val bound = activity.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            Log.i(TAG, "bindService() returned $bound")
+        } catch (e: Throwable) {
+            Log.e(TAG, "bindService() failed", e)
+        }
     }
 
     private fun ensureNotificationPermission() {
