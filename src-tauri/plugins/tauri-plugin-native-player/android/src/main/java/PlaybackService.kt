@@ -4,6 +4,8 @@ import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -36,7 +38,17 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        player = ExoPlayer.Builder(this).build().apply {
+        // A pure ambient-noise loop has no reason to duck/pause for other
+        // audio, so we don't let ExoPlayer request audio focus at all —
+        // matching metiq-xyz/android-app, which never requests focus by
+        // default and therefore never gets involuntarily paused on it.
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+        player = ExoPlayer.Builder(this)
+            .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ false)
+            .build().apply {
             repeatMode = Player.REPEAT_MODE_ONE   // seamless single-track loop
             playWhenReady = false
             setMediaItem(MediaItem.fromUri("asset:///rain-loop-long.ogg"))
