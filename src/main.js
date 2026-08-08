@@ -1,8 +1,10 @@
 /* justrain — vanilla port of Rain.dc.html.
    Canvas rain + thunder flash ported verbatim from the design's tick loop.
-   Audio is bundled into the APK and played NATIVELY via a Media3
-   (ExoPlayer + MediaSessionService) plugin so it has a media notification and
-   keeps playing with the screen off. The webview is just the UI + controller. */
+   Audio is bundled into the APK and played NATIVELY via a raw AudioTrack
+   engine (ported from metiq-xyz/android-app) with a MediaSession purely for
+   the OS notification, so it has a media notification and keeps playing
+   with the screen off. Play/pause fades happen natively — the webview is
+   just the UI + controller. */
 
 const $ = (id) => document.getElementById(id);
 
@@ -109,13 +111,9 @@ function tick(t) {
 }
 
 /* ─────────────────────────── native audio ─────────────────────────── */
-let audioReady = false, startedOnce = false, fadeTimer = null, curVol = 0;
-
-function targetVol() {
-  if (!state.playing) return 0;
-  return Math.max(0, Math.min(1, state.vol));
-}
-function clearFade() { if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; } }
+// Play/pause fades happen natively (AudioEngine); the webview just tells it
+// to play/pause and sets the instantaneous volume level for slider drags.
+let audioReady = false, startedOnce = false;
 
 // Right after page load, Tauri may not have finished registering the native
 // plugin instance yet — invoke() rejects with "Plugin native-player not
@@ -135,28 +133,16 @@ async function npInvoke(cmd, args) {
 
 let volErrShown = false;
 async function npSetVol(v) {
-  curVol = Math.max(0, Math.min(1, v));
-  try { await npInvoke("set_volume", { volume: curVol }); }
+  const clamped = Math.max(0, Math.min(1, v));
+  try { await npInvoke("set_volume", { volume: clamped }); }
   catch (e) {
     console.error("[justrain] set_volume", e);
     if (!volErrShown) { volErrShown = true; showError("volume control failed: " + errText(e), e); }
   }
 }
-function fadeTo(target, ms) {
-  clearFade();
-  target = Math.max(0, Math.min(1, target));
-  if (ms <= 0) { npSetVol(target); return; }
-  const start = curVol, steps = Math.max(1, Math.round(ms / 120)), stepMs = ms / steps;
-  let i = 0;
-  fadeTimer = setInterval(() => {
-    i++; const k = Math.min(1, i / steps);
-    npSetVol(start + (target - start) * k);
-    if (k >= 1) clearFade();
-  }, stepMs);
-}
-function setVolImmediate() { clearFade(); npSetVol(targetVol()); }
-async function npPlay() {
-  try { await npInvoke("play"); return true; }
+function setVolImmediate() { npSetVol(state.vol); }
+async function npPlay(soft) {
+  try { await npInvoke("play", { soft: !!soft }); return true; }
   catch (e) { showError("play failed: " + errText(e), e); return false; }
 }
 async function npPause() {
@@ -164,19 +150,16 @@ async function npPause() {
   catch (e) { showError("pause failed: " + errText(e), e); }
 }
 
-// Reflect state.playing onto the native player, with a soft/quick fade.
+// Reflect state.playing onto the native player. The native engine owns the
+// fade (soft ~18s start-of-day fade-in vs a quick ~400ms toggle fade).
 async function applyPlayState() {
   if (!audioReady) return;
   if (state.playing) {
-    const tgt = targetVol();
-    const soft = state.softStart && !startedOnce;
-    await npSetVol(soft ? Math.min(tgt, tgt * 0.25) : tgt);   // set volume before play, no blip
-    await npPlay();
+    await npSetVol(state.vol);
+    await npPlay(state.softStart && !startedOnce);
     startedOnce = true;
-    fadeTo(tgt, soft ? 18000 : 400);
   } else {
-    fadeTo(0, 600);
-    setTimeout(() => { if (!state.playing) npPause(); }, 700);
+    await npPause();
   }
 }
 

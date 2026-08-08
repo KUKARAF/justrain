@@ -1,80 +1,75 @@
 package page.osmosis.nativeplayer
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
 import android.os.Binder
 import android.os.IBinder
 import android.util.Log
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
+import androidx.core.content.ContextCompat
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
 private const val TAG = "PlaybackService"
 
 /**
- * A Media3 MediaSessionService: hosts an ExoPlayer and a MediaSession. The
- * service automatically builds the media notification and runs as a foreground
- * service while playing, which is what gives us lock-screen/notification
- * controls and background (screen-off) playback.
+ * Hosts the AudioEngine (raw AudioTrack playback, see AudioEngine.kt) and a
+ * MediaSession that exists purely to drive the OS notification/lock-screen
+ * surface via EnginePlayer, a passive Player adapter. The service runs as a
+ * foreground service while playing, which is what gives us background
+ * (screen-off) playback.
  *
  * Playback control does NOT go through the MediaSession/MediaController IPC
- * path — that async handshake is fragile. Instead the plugin binds directly to
- * this service (see LocalBinder below) and calls ExoPlayer synchronously. The
- * MediaSession exists purely to drive the OS notification surface.
+ * path — the plugin binds directly to this service (see LocalBinder) and
+ * calls AudioEngine synchronously. Unlike our previous ExoPlayer-based
+ * implementation, this deliberately never requests audio focus (matching
+ * metiq-xyz/android-app's proven approach), so nothing can involuntarily
+ * pause it. The one exception is ACTION_AUDIO_BECOMING_NOISY (headphones
+ * unplugged) — standard Android practice, unrelated to audio focus — which
+ * pauses instantly to avoid rain suddenly blasting out of the speaker.
  */
 class PlaybackService : MediaSessionService() {
+    private lateinit var engine: AudioEngine
+    private lateinit var player: EnginePlayer
     private var session: MediaSession? = null
-    lateinit var player: ExoPlayer
-        private set
 
     inner class LocalBinder : Binder() {
-        val service: PlaybackService get() = this@PlaybackService
+        fun play(soft: Boolean) {
+            val fadeMs = if (soft && !engine.hasStarted()) SOFT_START_FADE_MS else NORMAL_FADE_MS
+            engine.play(fadeMs)
+            player.notifyPlaying()
+        }
+        fun pause() {
+            engine.pause(NORMAL_FADE_MS)
+            player.notifyPaused()
+        }
+        fun setVolume(v: Float) {
+            engine.setVolume(v)
+        }
     }
     private val localBinder = LocalBinder()
 
+    private val becomingNoisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                Log.i(TAG, "ACTION_AUDIO_BECOMING_NOISY — pausing instantly")
+                player.notifyPausedExternally()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
-        // A pure ambient-noise loop has no reason to duck/pause for other
-        // audio, so we don't let ExoPlayer request audio focus at all —
-        // matching metiq-xyz/android-app, which never requests focus by
-        // default and therefore never gets involuntarily paused on it.
-        val audioAttributes = AudioAttributes.Builder()
-            .setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-            .build()
-        player = ExoPlayer.Builder(this)
-            .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ false)
-            .build().apply {
-            repeatMode = Player.REPEAT_MODE_ONE   // seamless single-track loop
-            playWhenReady = false
-            setMediaItem(MediaItem.fromUri("asset:///rain-loop-long.ogg"))
-            prepare()
-            // Diagnostic only: log *why* playback pauses/stops so we can tell
-            // a user-requested pause from ExoPlayer's automatic audio-focus
-            // handling from a playback error.
-            addListener(object : Player.Listener {
-                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-                    Log.i(TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
-                }
-                override fun onPlaybackSuppressionReasonChanged(reason: Int) {
-                    Log.i(TAG, "onPlaybackSuppressionReasonChanged reason=$reason")
-                }
-                override fun onIsPlayingChanged(isPlaying: Boolean) {
-                    Log.i(TAG, "onIsPlayingChanged isPlaying=$isPlaying")
-                }
-                override fun onPlaybackStateChanged(state: Int) {
-                    Log.i(TAG, "onPlaybackStateChanged state=$state")
-                }
-                override fun onPlayerError(error: PlaybackException) {
-                    Log.e(TAG, "onPlayerError", error)
-                }
-            })
-        }
+        engine = AudioEngine(this)
+        player = EnginePlayer(engine, mainLooper)
         session = MediaSession.Builder(this, player).build()
+        ContextCompat.registerReceiver(
+            this, becomingNoisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        PcmStore.preload(this)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -85,8 +80,9 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        runCatching { unregisterReceiver(becomingNoisyReceiver) }
         session?.run {
-            player.release()
+            player.release()   // triggers handleRelease() -> engine.release()
             release()
         }
         session = null
@@ -95,5 +91,7 @@ class PlaybackService : MediaSessionService() {
 
     companion object {
         const val CONTROL_ACTION = "page.osmosis.nativeplayer.CONTROL"
+        const val SOFT_START_FADE_MS = 18_000L
+        const val NORMAL_FADE_MS = 400L
     }
 }

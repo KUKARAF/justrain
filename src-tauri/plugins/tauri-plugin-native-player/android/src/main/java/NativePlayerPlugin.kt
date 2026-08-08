@@ -24,29 +24,34 @@ import app.tauri.plugin.Plugin
 private const val TAG = "NativePlayerPlugin"
 
 @InvokeArg
+class PlayArgs {
+    var soft: Boolean = false
+}
+
+@InvokeArg
 class VolumeArgs {
     var volume: Float = 1.0f
 }
 
 /**
  * Controls PlaybackService via a direct bindService()/Binder connection — a
- * synchronous, in-process reference to its ExoPlayer — instead of the async
- * MediaController/SessionToken IPC handshake (which was the actual source of
- * "player unavailable" failures).
+ * synchronous, in-process reference to its AudioEngine — instead of the
+ * async MediaController/SessionToken IPC handshake (which was the actual
+ * source of "player unavailable" failures).
  */
 @TauriPlugin
 class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
-    private var playback: PlaybackService? = null
+    private var binder: PlaybackService.LocalBinder? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val connection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            playback = (binder as? PlaybackService.LocalBinder)?.service
-            Log.i(TAG, "onServiceConnected, playback=$playback")
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            binder = service as? PlaybackService.LocalBinder
+            Log.i(TAG, "onServiceConnected, binder=$binder")
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.w(TAG, "onServiceDisconnected")
-            playback = null
+            binder = null
         }
     }
 
@@ -79,27 +84,28 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun play(invoke: Invoke) {
         ensureNotificationPermission()
-        val service = playback
-        if (service == null) { invoke.reject("player unavailable"); return }
-        mainHandler.post { service.player.play() }
+        val args = invoke.parseArgs(PlayArgs::class.java)
+        val b = binder
+        if (b == null) { invoke.reject("player unavailable"); return }
+        mainHandler.post { b.play(args.soft) }
         invoke.resolve()
     }
 
     @Command
     fun pause(invoke: Invoke) {
-        val service = playback
-        if (service == null) { invoke.reject("player unavailable"); return }
-        mainHandler.post { service.player.pause() }
+        val b = binder
+        if (b == null) { invoke.reject("player unavailable"); return }
+        mainHandler.post { b.pause() }
         invoke.resolve()
     }
 
     @Command
     fun setVolume(invoke: Invoke) {
         val args = invoke.parseArgs(VolumeArgs::class.java)
-        val service = playback
-        if (service == null) { invoke.reject("player unavailable"); return }
+        val b = binder
+        if (b == null) { invoke.reject("player unavailable"); return }
         val v = args.volume.coerceIn(0f, 1f)
-        mainHandler.post { service.player.volume = v }
+        mainHandler.post { b.setVolume(v) }
         invoke.resolve()
     }
 }

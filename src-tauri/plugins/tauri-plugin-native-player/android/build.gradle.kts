@@ -28,6 +28,7 @@ android {
 dependencies {
     implementation(project(":tauri-android"))
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
     implementation("androidx.media3:media3-session:1.4.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
