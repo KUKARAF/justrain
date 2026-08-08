@@ -71,7 +71,7 @@ body {
 .topbar { display: flex; align-items: center; flex: none; height: 26px; }
 .topbar .spacer { width: 44px; }
 .brand { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; }
-.brand-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 10px var(--color-accent); }
+.brand-mark { flex: none; filter: drop-shadow(0 0 4px rgba(145,132,217,.7)); }
 .brand-word { font-size: 11px; letter-spacing: .34em; text-transform: uppercase; color: rgba(233,233,237,.5); }
 .gear-wrap { width: 44px; display: flex; justify-content: flex-end; transition: opacity .7s; }
 .icon-btn { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: transparent; border: 0; cursor: pointer; }

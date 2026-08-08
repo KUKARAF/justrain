@@ -85,13 +85,17 @@ jobs:
       - name: Install Tauri CLI (v2)
         run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Generate app icons
-        run: cargo tauri icon src-tauri/icons/icon.png
-
       - name: Initialize Android project
         run: cargo tauri android init
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/${{ env.NDK_VERSION }}
+
+      - name: Generate app icons
+        # Must run AFTER `android init`: the icon command only writes
+        # Android mipmap resources if gen/android already exists, otherwise
+        # it silently skips them and android init's own template default
+        # icon (an unrelated teal/yellow chain-link) ships instead.
+        run: cargo tauri icon src-tauri/icons/icon.png
 
       - name: Patch gen/android (signing + version override)
         run: python3 .github/scripts/patch_gradle.py
