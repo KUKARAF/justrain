@@ -3,11 +3,15 @@ package page.osmosis.nativeplayer
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
+import android.util.Log
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+
+private const val TAG = "PlaybackService"
 
 /**
  * A Media3 MediaSessionService: hosts an ExoPlayer and a MediaSession. The
@@ -37,6 +41,26 @@ class PlaybackService : MediaSessionService() {
             playWhenReady = false
             setMediaItem(MediaItem.fromUri("asset:///rain-loop-long.ogg"))
             prepare()
+            // Diagnostic only: log *why* playback pauses/stops so we can tell
+            // a user-requested pause from ExoPlayer's automatic audio-focus
+            // handling from a playback error.
+            addListener(object : Player.Listener {
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    Log.i(TAG, "onPlayWhenReadyChanged playWhenReady=$playWhenReady reason=$reason")
+                }
+                override fun onPlaybackSuppressionReasonChanged(reason: Int) {
+                    Log.i(TAG, "onPlaybackSuppressionReasonChanged reason=$reason")
+                }
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    Log.i(TAG, "onIsPlayingChanged isPlaying=$isPlaying")
+                }
+                override fun onPlaybackStateChanged(state: Int) {
+                    Log.i(TAG, "onPlaybackStateChanged state=$state")
+                }
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(TAG, "onPlayerError", error)
+                }
+            })
         }
         session = MediaSession.Builder(this, player).build()
     }
