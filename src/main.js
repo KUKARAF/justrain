@@ -14,7 +14,7 @@ const NP = "plugin:native-player|";
 
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
-  vol: 0.72, elapsed: 0,
+  vol: 0.72,
   sheet: null, chrome: true,
   thunder: true, softStart: true, background: true, dim: false,
 };
@@ -185,9 +185,6 @@ document.addEventListener("visibilitychange", () => {
   else if (state.playing) { npPlay(); setVolImmediate(); }
 });
 
-/* ─────────────────────────── helpers (ported) ─────────────────────────── */
-function fmt(s) { const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + String(r).padStart(2, "0"); }
-
 /* ─────────────────────────── actions ─────────────────────────── */
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
@@ -249,8 +246,6 @@ function render() {
   const s = state;
   const show = s.chrome || !s.playing;
 
-  $("bigTime").textContent = fmt(s.elapsed);
-
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
   $("playBtn").style.paddingLeft = s.playing ? "0" : "5px";
@@ -280,13 +275,8 @@ function updateDim(show) {
   $("screen").classList.toggle("dim", state.dim && state.playing && !show && !state.sheet);
 }
 
-/* ─────────────────────────── clock loop ─────────────────────────── */
+/* ─────────────────────────── idle-chrome-hide loop ─────────────────────────── */
 setInterval(() => {
-  const s = state;
-  if (s.playing) {
-    s.elapsed += 1;
-    render();
-  }
   if (state.playing && !state.sheet && state.chrome && Date.now() - idleAt > 4500) {
     state.chrome = false; render();
   }

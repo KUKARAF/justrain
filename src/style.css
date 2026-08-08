@@ -79,8 +79,6 @@ body {
 
 /* center */
 .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
-.time-block { display: flex; flex-direction: column; align-items: center; gap: 7px; }
-.big-time { font-size: 66px; line-height: 1; font-weight: 200; letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: #f3f5fe; text-shadow: 0 0 32px rgba(145,132,217,.35); }
 .play-btn {
   width: 92px; height: 92px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
