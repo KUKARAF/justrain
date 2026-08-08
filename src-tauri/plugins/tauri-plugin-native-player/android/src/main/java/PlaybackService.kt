@@ -52,10 +52,12 @@ class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
 
     inner class LocalBinder : Binder() {
-        fun play(soft: Boolean) {
+        fun play(soft: Boolean, onResult: (Boolean) -> Unit) {
             val fadeMs = if (soft && !engine.hasStarted()) SOFT_START_FADE_MS else NORMAL_FADE_MS
-            engine.play(fadeMs)
-            player.notifyPlaying()
+            engine.play(fadeMs) { success ->
+                if (success) player.notifyPlaying()
+                onResult(success)
+            }
         }
         fun pause() {
             engine.pause(NORMAL_FADE_MS)

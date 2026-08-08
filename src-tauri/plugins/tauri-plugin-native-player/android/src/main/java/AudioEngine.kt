@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.pow
 import kotlin.math.sqrt
 
+private const val TAG = "AudioEngine"
 private const val FADE_STEP_MS = 10L
 private const val BLOCK_FRAMES = 1024
 
@@ -53,29 +55,47 @@ class AudioEngine(private val context: Context) {
 
     fun hasStarted(): Boolean = track != null
 
-    /** Starts playback if not already started, then fades in over [fadeMs]. */
-    fun play(fadeMs: Long) {
+    /**
+     * Starts playback if not already started, then fades in over [fadeMs].
+     * [onResult] is called with true once playback has genuinely begun, or
+     * false if it failed — callers must not report "playing" until this
+     * fires, otherwise the UI/notification can lie about playback state.
+     */
+    fun play(fadeMs: Long, onResult: (Boolean) -> Unit = {}) {
         val existing = track
         if (existing != null) {
             fadeJob?.cancel()
             fadeJob = fadeScope.launch {
                 runCatching { existing.play() }
+                    .onFailure { Log.e(TAG, "AudioTrack.play() failed", it) }
                 rampVolume(fadeMs, toward = 1f)
             }
+            onResult(true)
             return
         }
-        if (startJob != null) return
+        if (startJob != null) { onResult(false); return }
         val job = feederScope.launch {
             val pcm = try {
                 PcmStore.awaitPcm(context)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Throwable) {
+            } catch (e: Throwable) {
+                Log.e(TAG, "PCM decode/cache-load failed", e)
+                withContext(Dispatchers.Main) { onResult(false) }
                 return@launch
             }
-            val newTrack = withContext(Dispatchers.IO) { buildTrack(pcm.sampleRate, pcm.channelMask) }
+            val newTrack = try {
+                withContext(Dispatchers.IO) { buildTrack(pcm.sampleRate, pcm.channelMask) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Log.e(TAG, "AudioTrack construction failed", e)
+                withContext(Dispatchers.Main) { onResult(false) }
+                return@launch
+            }
             if (!isActive) {
                 runCatching { newTrack.release() }
+                withContext(Dispatchers.Main) { onResult(false) }
                 return@launch
             }
             newTrack.setVolume(0f)
@@ -84,6 +104,7 @@ class AudioEngine(private val context: Context) {
             feeder = launchFeeder(newTrack, pcm)
             fadeJob?.cancel()
             fadeJob = fadeScope.launch { rampVolume(fadeMs, toward = 1f) }
+            withContext(Dispatchers.Main) { onResult(true) }
         }
         job.invokeOnCompletion { startJob = null }
         startJob = job
@@ -152,6 +173,7 @@ class AudioEngine(private val context: Context) {
             val ch = pcm.channelCount
             val frames = src.size / ch
             if (frames == 0) {
+                Log.e(TAG, "decoded PCM has 0 frames — nothing to play")
                 runCatching { track.release() }
                 return@launch
             }
@@ -172,7 +194,10 @@ class AudioEngine(private val context: Context) {
                     var off = 0
                     while (off < total && isActive) {
                         val n = track.write(buf, off, total - off, AudioTrack.WRITE_NON_BLOCKING)
-                        if (n < 0) return@launch
+                        if (n < 0) {
+                            Log.e(TAG, "AudioTrack.write() returned error code $n")
+                            return@launch
+                        }
                         off += n
                         if (!started && off > 0) {
                             track.play()

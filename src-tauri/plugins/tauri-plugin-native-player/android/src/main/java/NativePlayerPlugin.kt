@@ -87,8 +87,12 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
         val args = invoke.parseArgs(PlayArgs::class.java)
         val b = binder
         if (b == null) { invoke.reject("player unavailable"); return }
-        mainHandler.post { b.play(args.soft) }
-        invoke.resolve()
+        mainHandler.post {
+            b.play(args.soft) { success ->
+                if (success) invoke.resolve()
+                else invoke.reject("failed to start playback — see logcat tag AudioEngine")
+            }
+        }
     }
 
     @Command
