@@ -119,10 +119,27 @@ function targetVol() {
   return Math.max(0, Math.min(1, g));
 }
 function clearFade() { if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; } }
+
+// Right after page load, Tauri may not have finished registering the native
+// plugin instance yet — invoke() rejects with "Plugin native-player not
+// initialized" for a brief window. Retry a few times before surfacing it.
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function npInvoke(cmd, args) {
+  const attempts = 8;
+  for (let i = 0; i < attempts; i++) {
+    try { return await invoke(NP + cmd, args); }
+    catch (e) {
+      const notInit = errText(e).toLowerCase().includes("not initialized");
+      if (notInit && i < attempts - 1) { await sleep(150); continue; }
+      throw e;
+    }
+  }
+}
+
 let volErrShown = false;
 async function npSetVol(v) {
   curVol = Math.max(0, Math.min(1, v));
-  try { await invoke(NP + "set_volume", { volume: curVol }); }
+  try { await npInvoke("set_volume", { volume: curVol }); }
   catch (e) {
     console.error("[justrain] set_volume", e);
     if (!volErrShown) { volErrShown = true; showError("volume control failed: " + errText(e), e); }
@@ -142,11 +159,11 @@ function fadeTo(target, ms) {
 }
 function setVolImmediate() { clearFade(); npSetVol(targetVol()); }
 async function npPlay() {
-  try { await invoke(NP + "play"); return true; }
+  try { await npInvoke("play"); return true; }
   catch (e) { showError("play failed: " + errText(e), e); return false; }
 }
 async function npPause() {
-  try { await invoke(NP + "pause"); }
+  try { await npInvoke("pause"); }
   catch (e) { showError("pause failed: " + errText(e), e); }
 }
 
