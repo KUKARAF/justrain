@@ -79,10 +79,8 @@ body {
 
 /* center */
 .center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; }
-.state-word { font-size: 10px; letter-spacing: .3em; text-transform: uppercase; color: var(--color-accent-300); opacity: .85; }
 .time-block { display: flex; flex-direction: column; align-items: center; gap: 7px; }
 .big-time { font-size: 66px; line-height: 1; font-weight: 200; letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: #f3f5fe; text-shadow: 0 0 32px rgba(145,132,217,.35); }
-.big-label { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: rgba(233,233,237,.4); }
 .play-btn {
   width: 92px; height: 92px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center; cursor: pointer;
@@ -113,10 +111,7 @@ body {
 }
 .row:hover { background: rgba(233,233,237,.06); }
 .row-thunder { margin-top: 20px; }
-.row-timer { margin-top: 12px; }
 .row-label { display: flex; align-items: center; gap: 11px; font-size: 13.5px; letter-spacing: .01em; }
-.timer-val { font-size: 13px; color: rgba(233,233,237,.4); }
-.timer-val.on { color: var(--color-accent-200); }
 
 /* switches */
 .switch {
@@ -155,18 +150,6 @@ body {
 .sheet-sub { font-size: 12.5px; color: rgba(233,233,237,.5); margin-bottom: 14px; }
 .sheet-list { display: flex; flex-direction: column; }
 .sheet-footer { text-align: center; font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: rgba(233,233,237,.25); margin-top: 22px; }
-
-/* timer option rows */
-.opt {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 4px; background: transparent; border: 0; border-bottom: 1px solid rgba(233,233,237,.07);
-  cursor: pointer; font-family: var(--font-body); text-align: left; color: rgba(233,233,237,.75);
-}
-.opt:hover { background: rgba(233,233,237,.05); }
-.opt.sel { color: var(--color-accent-200); }
-.opt-text { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
-.opt-label { font-size: 15px; }
-.opt-sub { font-size: 11px; color: rgba(233,233,237,.38); letter-spacing: .04em; }
 
 /* settings rows */
 .set {

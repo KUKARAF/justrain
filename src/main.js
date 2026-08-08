@@ -12,7 +12,7 @@ const NP = "plugin:native-player|";
 
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
-  vol: 0.72, timer: 0, remaining: 0, elapsed: 0,
+  vol: 0.72, elapsed: 0,
   sheet: null, chrome: true,
   thunder: true, softStart: true, background: true, dim: false,
 };
@@ -71,8 +71,7 @@ function tick(t) {
   const dt = Math.min(48, t - (lastT || t)); lastT = t;
   const k = dt / 16.67;
   const s = state;
-  const fade = s.timer > 0 && s.remaining < 60 ? Math.max(0, s.remaining / 60) : 1;
-  const target = s.playing ? 0.82 * fade : 0;
+  const target = s.playing ? 0.82 : 0;
   const rate = s.softStart && s.playing ? 0.012 : 0.03;
   inten += (target - inten) * rate * k;
   const I = inten, vol = 0.45 + s.vol * 0.55;
@@ -114,9 +113,7 @@ let audioReady = false, startedOnce = false, fadeTimer = null, curVol = 0;
 
 function targetVol() {
   if (!state.playing) return 0;
-  let g = state.vol;
-  if (state.timer > 0 && state.remaining < 60) g *= Math.max(0, state.remaining / 60);
-  return Math.max(0, Math.min(1, g));
+  return Math.max(0, Math.min(1, state.vol));
 }
 function clearFade() { if (fadeTimer) { clearInterval(fadeTimer); fadeTimer = null; } }
 
@@ -207,11 +204,6 @@ document.addEventListener("visibilitychange", () => {
 
 /* ─────────────────────────── helpers (ported) ─────────────────────────── */
 function fmt(s) { const m = Math.floor(s / 60), r = Math.floor(s % 60); return m + ":" + String(r).padStart(2, "0"); }
-function clock(minsFromNow) {
-  const d = new Date(Date.now() + minsFromNow * 60000);
-  let h = d.getHours(); const ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
-  return h + ":" + String(d.getMinutes()).padStart(2, "0") + " " + ap;
-}
 
 /* ─────────────────────────── actions ─────────────────────────── */
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
@@ -224,19 +216,11 @@ function togglePlay() {
   render();
 }
 function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; render(); }
-function setTimer(m) {
-  idleAt = Date.now();
-  state.timer = m; state.remaining = m * 60; state.sheet = null;
-  if (m > 0 && audioReady) state.playing = true;
-  applyPlayState();
-  render();
-}
 function toggleSetting(key) {
   state[key] = !state[key];
   if (key === "dim") updateDim();
   render();
 }
-function openTimer() { state.sheet = "timer"; state.chrome = true; render(); }
 function openSettings() { state.sheet = "settings"; state.chrome = true; render(); }
 function closeSheet() { state.sheet = null; render(); }
 
@@ -255,7 +239,6 @@ function onVolDown(e) {
 }
 
 /* ─────────────────────────── render ─────────────────────────── */
-const TIMER_OPTS = [0, 15, 30, 45, 60, 90];
 const SETTINGS = [
   { key: "thunder", label: "thunder", sub: "a distant roll every few minutes" },
   { key: "softStart", label: "soft start", sub: "rain fades in over half a minute" },
@@ -264,18 +247,6 @@ const SETTINGS = [
 ];
 
 function buildLists() {
-  const tl = $("timerList");
-  tl.innerHTML = "";
-  TIMER_OPTS.forEach((m) => {
-    const b = document.createElement("button");
-    b.className = "opt"; b.dataset.m = m;
-    b.innerHTML =
-      '<span class="opt-text"><span class="opt-label"></span><span class="opt-sub"></span></span>' +
-      '<svg class="opt-check" width="15" height="12" viewBox="0 0 15 12" fill="none" style="display:none"><path d="M1.5 6.4l4 4L13.5 1.6" stroke="#9184d9" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
-    b.querySelector(".opt-label").textContent = m === 0 ? "off" : m + " minutes";
-    b.addEventListener("click", () => setTimer(m));
-    tl.appendChild(b);
-  });
   const sl = $("settingsList");
   sl.innerHTML = "";
   SETTINGS.forEach((r) => {
@@ -295,9 +266,7 @@ function render() {
   const s = state;
   const show = s.chrome || !s.playing;
 
-  $("stateWord").textContent = s.playing ? "raining" : "paused";
-  $("bigTime").textContent = s.timer > 0 ? fmt(s.remaining) : fmt(s.elapsed);
-  $("bigLabel").textContent = s.timer > 0 ? "stops at " + clock(s.remaining / 60) : (s.playing ? "raining for" : "held");
+  $("bigTime").textContent = fmt(s.elapsed);
 
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
@@ -308,10 +277,6 @@ function render() {
 
   $("thunderTrack").classList.toggle("on", s.thunder);
 
-  const tv = $("timerVal");
-  tv.textContent = s.timer > 0 ? s.timer + " min" : "off";
-  tv.classList.toggle("on", s.timer > 0);
-
   $("chrome").style.opacity = show ? "1" : "0";
   $("chrome").style.transform = show ? "translateY(0)" : "translateY(14px)";
   $("chrome").style.pointerEvents = show ? "auto" : "none";
@@ -319,15 +284,8 @@ function render() {
   $("gearWrap").style.pointerEvents = show ? "auto" : "none";
 
   $("backdrop").classList.toggle("show", !!s.sheet);
-  $("timerSheet").classList.toggle("open", s.sheet === "timer");
   $("settingsSheet").classList.toggle("open", s.sheet === "settings");
 
-  $("timerList").querySelectorAll(".opt").forEach((b) => {
-    const m = Number(b.dataset.m);
-    b.classList.toggle("sel", s.timer === m);
-    b.querySelector(".opt-sub").textContent = m === 0 ? "rain keeps going" : "until " + clock(m);
-    b.querySelector(".opt-check").style.display = s.timer === m ? "block" : "none";
-  });
   $("settingsList").querySelectorAll(".set").forEach((b) => {
     b.querySelector(".switch").classList.toggle("on", !!s[b.dataset.key]);
   });
@@ -344,11 +302,6 @@ setInterval(() => {
   const s = state;
   if (s.playing) {
     s.elapsed += 1;
-    if (s.timer > 0) {
-      s.remaining = Math.max(0, s.remaining - 1);
-      if (s.remaining < 60) setVolImmediate();       // track the rain-fade over the last minute
-      if (s.remaining === 0) { s.playing = false; s.timer = 0; s.chrome = true; applyPlayState(); }
-    }
     render();
   }
   if (state.playing && !state.sheet && state.chrome && Date.now() - idleAt > 4500) {
@@ -362,7 +315,6 @@ $("screen").addEventListener("click", (e) => {
 });
 $("playBtn").addEventListener("click", (e) => { e.stopPropagation(); togglePlay(); });
 $("thunderRow").addEventListener("click", (e) => { e.stopPropagation(); toggleThunder(); });
-$("timerRow").addEventListener("click", (e) => { e.stopPropagation(); openTimer(); });
 $("gearBtn").addEventListener("click", (e) => { e.stopPropagation(); openSettings(); });
 $("backdrop").addEventListener("click", closeSheet);
 $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVolDown(e); });
