@@ -2,9 +2,13 @@
 # Tag the current commit as <shortsha>.<MAJOR>.<MINOR> and push the tag, which
 # triggers the signed-release CI (a plain `git push` triggers a prerelease).
 #
-#   .tools/tag_and_push.sh          # keep MAJOR.MINOR, just refresh the short-sha
-#   .tools/tag_and_push.sh minor    # MINOR + 1
-#   .tools/tag_and_push.sh major    # MAJOR + 1, MINOR reset to 0
+#   .tools/tag_and_push.sh                          # keep MAJOR.MINOR, just refresh the short-sha
+#   .tools/tag_and_push.sh minor                    # MINOR + 1
+#   .tools/tag_and_push.sh major                    # MAJOR + 1, MINOR reset to 0
+#   .tools/tag_and_push.sh minor "fix background playback"
+#                                                    # message becomes the annotated tag body,
+#                                                    # which CI turns into the F-Droid changelog
+#                                                    # entry (fastlane/metadata/.../changelogs/)
 #
 # Version numbers are read from the most recent existing tag of this form.
 set -euo pipefail
@@ -14,8 +18,10 @@ cd "$(git rev-parse --show-toplevel)"
 bump="${1:-none}"
 case "$bump" in
   none|minor|major) ;;
-  *) echo "usage: $0 [minor|major]" >&2; exit 1 ;;
+  *) echo "usage: $0 [minor|major] [changelog message]" >&2; exit 1 ;;
 esac
+
+msg="${2:-}"
 
 # Most recent tag matching <anything>.<digits>.<digits>
 last="$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags \
@@ -48,6 +54,8 @@ if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   exit 1
 fi
 
-git tag -a "$tag" -m "justrain $tag"
+git tag -a "$tag" -m "justrain $tag${msg:+
+
+$msg}"
 git push origin "$tag"
 echo "Pushed $tag — the signed-release build will run in GitHub Actions."

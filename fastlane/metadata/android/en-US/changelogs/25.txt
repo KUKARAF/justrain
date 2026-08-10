@@ -1,0 +1,1 @@
+Initial F-Droid-ready release: added LICENSE, F-Droid listing metadata, and automated changelog generation on release.

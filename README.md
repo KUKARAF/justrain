@@ -105,3 +105,30 @@ is `Player.REPEAT_MODE_ONE`. The player's manifest (service + FOREGROUND_SERVICE
   going with the screen off; off → the app pauses when backgrounded.
 - **Thunder** is a visual lightning flash on the canvas; the rain loop is
   deliberately thunder-free audio.
+
+## License
+
+GPL-3.0-or-later. See [`LICENSE`](LICENSE).
+
+## F-Droid
+
+`fastlane/metadata/android/en-US/` holds the F-Droid listing (descriptions,
+screenshots, per-release changelogs). Release tags already equal
+`versionName` (see "Cutting a release" above), and CI writes a changelog
+entry (`fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`) from
+the tag's message on every real release — see `.tools/tag_and_push.sh` for
+how to attach a changelog message to a release tag.
+
+Getting into the official F-Droid repo is a one-time, human-reviewed
+submission on F-Droid's side, not something this repo's CI can do on its
+own:
+
+1. Fork [`fdroiddata`](https://gitlab.com/fdroid/fdroiddata) on GitLab.
+2. Add a build recipe at `metadata/page.osmosis.justrain.yml` describing how
+   to build this app from source (Rust toolchain + Android NDK + Tauri CLI,
+   mirroring the steps in `.github/workflows/android.yml`).
+3. Open a merge request against `fdroiddata` and respond to reviewer
+   feedback.
+
+See F-Droid's [Submitting to F-Droid](https://f-droid.org/docs/Submitting_to_F-Droid_Quick_Start_Guide/)
+guide for details.

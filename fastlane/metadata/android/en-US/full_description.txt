@@ -1,0 +1,9 @@
+justrain is a calm rain-sound app for sleep and focus.
+
+One tap starts a seamless loop of rain, with a thunder toggle for occasional
+visual lightning, and just a handful of settings — that is the whole app.
+No accounts, no ads, no tracking.
+
+Playback continues in the background and survives the screen locking, with
+standard media controls (play/pause) available from the notification and
+lock screen.
