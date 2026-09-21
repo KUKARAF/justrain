@@ -120,12 +120,12 @@ jobs:
           echo "window.__JUSTRAIN_VERSION__ = '${DISP}';" > src/version.js
           cat src/version.js
 
-      - name: Build signed APK
+      - name: Build signed APK + AAB
         run: |
           set -uo pipefail
           n=0
           until [ "$n" -ge 3 ]; do
-            if cargo tauri android build --apk; then exit 0; fi
+            if cargo tauri android build --apk --aab; then exit 0; fi
             n=$((n + 1))
             echo "::warning::build attempt $n failed (often a transient Maven 429); retrying in 30s"
             sleep 30
@@ -162,6 +162,29 @@ jobs:
         run: |
           AAPT="$(find "${ANDROID_HOME}/build-tools/${BUILD_TOOLS_VERSION}" -name aapt | head -n1)"
           "${AAPT}" dump badging "${{ steps.apk.outputs.path }}" | grep -E "package: name|versionName|versionCode" || true
+
+      - name: Locate & rename AAB
+        id: aab
+        run: |
+          set -euo pipefail
+          AAB="$(find src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' ! -name '*unsigned*' | head -n1)"
+          if [[ -z "${AAB}" ]]; then
+            echo "No AAB found:"; find src-tauri/gen/android -name '*.aab'; exit 1
+          fi
+          OUT="${RUNNER_TEMP}/justrain-${{ steps.vars.outputs.version }}.aab"
+          cp "${AAB}" "${OUT}"
+          echo "path=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload AAB artifact (for Play Console)
+        # Kept as a private workflow artifact (NOT attached to the public
+        # GitHub Release): it is the Play upload bundle, retrieved with
+        # `gh run download <run-id> -n <name>` and uploaded to Play Console.
+        uses: actions/upload-artifact@v4
+        with:
+          name: justrain-aab-${{ steps.vars.outputs.version }}
+          path: ${{ steps.aab.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
