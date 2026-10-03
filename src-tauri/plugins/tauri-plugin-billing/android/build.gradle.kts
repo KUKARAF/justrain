@@ -28,6 +28,6 @@ android {
 dependencies {
     implementation(project(":tauri-android"))
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.android.billingclient:billing-ktx:7.1.1")
+    implementation("com.android.billingclient:billing:8.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

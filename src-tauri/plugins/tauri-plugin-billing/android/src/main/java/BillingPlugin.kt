@@ -103,7 +103,10 @@ class BillingPlugin(private val activity: Activity) : Plugin(activity) {
                 )
             )
             .build()
-        billingClient.queryProductDetailsAsync(params) { result, list ->
+        billingClient.queryProductDetailsAsync(params) { result, queryResult ->
+            // PBL 8 wraps the response: fetched products are in productDetailsList
+            // (unfetchable ones would be in queryResult.unfetchedProductList).
+            val list = queryResult.productDetailsList
             if (result.responseCode == BillingClient.BillingResponseCode.OK && list.isNotEmpty()) {
                 productDetails = list[0]
                 onResult(productDetails)
