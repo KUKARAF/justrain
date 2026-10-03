@@ -1,0 +1,6 @@
+[default]
+description = "Default permissions for the billing plugin"
+permissions = [
+    "allow-tip",
+    "allow-get-price",
+]

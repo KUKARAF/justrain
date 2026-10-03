@@ -20,6 +20,7 @@ pub fn run() {
     #[cfg(mobile)]
     {
         builder = builder.plugin(tauri_plugin_native_player::init());
+        builder = builder.plugin(tauri_plugin_billing::init());
     }
 
     builder

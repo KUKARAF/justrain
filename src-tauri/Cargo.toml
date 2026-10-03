@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 tauri-plugin-native-player = { path = "./plugins/tauri-plugin-native-player" }
+tauri-plugin-billing = { path = "./plugins/tauri-plugin-billing" }
 
 [profile.release]
 opt-level = "s"

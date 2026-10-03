@@ -12,11 +12,18 @@ const TAURI = window.__TAURI__;
 const invoke = TAURI ? TAURI.core.invoke : null;
 const NP = "plugin:native-player|";
 
+// Persisted honor-system flag: when on, the daily tip nudge never shows. We
+// never verify it — that's the whole point. Wrapped in try/catch because
+// localStorage can throw (private mode, blocked storage).
+function loadPaid() { try { return localStorage.getItem("justrain.paid") === "1"; } catch (_) { return false; } }
+function savePaid(v) { try { localStorage.setItem("justrain.paid", v ? "1" : "0"); } catch (_) {} }
+
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
   vol: 0.72,
   sheet: null, chrome: true,
   thunder: true, softStart: true, background: true, dim: false,
+  alreadyPaid: loadPaid(),
 };
 let idleAt = Date.now();
 
@@ -185,6 +192,99 @@ document.addEventListener("visibilitychange", () => {
   else if (state.playing) { npPlay(); setVolImmediate(); }
 });
 
+/* ─────────────────────────── tip (in-app purchase) ─────────────────────────── */
+// The app is free; this is an optional consumable "buy me a coffee" handled by
+// the billing plugin (Google Play Billing). Same not-initialized retry as audio.
+const BILLING = "plugin:billing|";
+async function billingInvoke(cmd, args) {
+  const attempts = 8;
+  for (let i = 0; i < attempts; i++) {
+    try { return await invoke(BILLING + cmd, args); }
+    catch (e) {
+      if (errText(e).toLowerCase().includes("not initialized") && i < attempts - 1) { await sleep(150); continue; }
+      throw e;
+    }
+  }
+}
+
+// Shared purchase flow for both the settings button and the daily popup. On a
+// successful (or pending) tip we flip alreadyPaid so we stop nudging someone
+// who just paid.
+async function doTip() {
+  try {
+    const r = await billingInvoke("tip");
+    if (r && (r.status === "purchased" || r.status === "pending")) {
+      state.alreadyPaid = true;
+      savePaid(true);
+      hideTipPopup();
+      const thanks = $("tipThanks");
+      if (thanks) {
+        thanks.textContent = r.status === "pending" ? "payment pending — thank you 💜" : "thank you 💜";
+        thanks.classList.add("show");
+      }
+      const sBtn = $("tipBtn"); if (sBtn) sBtn.style.display = "none";
+      render();  // reflect the "i already paid" toggle in settings
+      return true;
+    }
+  } catch (err) {
+    // Backing out of the Play sheet isn't worth an error banner.
+    if (!errText(err).toLowerCase().includes("cancel")) showError("tip failed: " + errText(err), err);
+  }
+  return false;
+}
+
+/* once-a-day tip nudge (honor system; never gates the app) */
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+function showTipPopup() { const p = $("tipPopup"); if (p) p.classList.add("show"); }
+function hideTipPopup() { const p = $("tipPopup"); if (p) p.classList.remove("show"); }
+function maybeShowDailyTip() {
+  if (state.alreadyPaid || !invoke) return;
+  let last = null;
+  try { last = localStorage.getItem("justrain.lastNag"); } catch (_) {}
+  if (last === todayStr()) return;
+  try { localStorage.setItem("justrain.lastNag", todayStr()); } catch (_) {}
+  showTipPopup();
+}
+
+async function initTip() {
+  if (!invoke) { const b = $("tipBtn"); if (b) b.style.display = "none"; return; }  // web build: no billing
+
+  // Show the real localized price on both tip buttons if the product is live;
+  // if it isn't configured in Play yet, quietly keep the default labels.
+  let label = null;
+  try {
+    const r = await billingInvoke("get_price");
+    if (r && r.price) label = "buy me a coffee · " + r.price;
+  } catch (_) { /* product not configured yet */ }
+  if (label) ["tipBtn", "tipPopPay"].forEach((id) => { const el = $(id); if (el) el.textContent = label; });
+
+  // settings-sheet button
+  const sBtn = $("tipBtn");
+  if (sBtn) sBtn.addEventListener("click", async (e) => {
+    e.stopPropagation(); sBtn.disabled = true;
+    try { await doTip(); } finally { sBtn.disabled = false; }
+  });
+
+  // daily-popup buttons
+  const payBtn = $("tipPopPay");
+  if (payBtn) payBtn.addEventListener("click", async (e) => {
+    e.stopPropagation(); payBtn.disabled = true;
+    try { await doTip(); } finally { payBtn.disabled = false; }
+  });
+  const laterBtn = $("tipPopLater");
+  if (laterBtn) laterBtn.addEventListener("click", (e) => { e.stopPropagation(); hideTipPopup(); });
+  const paidBtn = $("tipPopPaid");
+  if (paidBtn) paidBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    state.alreadyPaid = true; savePaid(true); hideTipPopup(); render();
+  });
+  const pop = $("tipPopup");  // tap the dimmed area behind the card = "maybe tomorrow"
+  if (pop) pop.addEventListener("click", (e) => { if (e.target === pop) hideTipPopup(); });
+
+  // nudge once per day, a few seconds after launch so the app settles first
+  setTimeout(maybeShowDailyTip, 3500);
+}
+
 /* ─────────────────────────── actions ─────────────────────────── */
 function reveal() { idleAt = Date.now(); if (!state.chrome) { state.chrome = true; render(); } }
 function togglePlay() {
@@ -199,6 +299,7 @@ function toggleThunder() { idleAt = Date.now(); state.thunder = !state.thunder; 
 function toggleSetting(key) {
   state[key] = !state[key];
   if (key === "dim") updateDim();
+  if (key === "alreadyPaid") savePaid(state.alreadyPaid);
   render();
 }
 function openSettings() { state.sheet = "settings"; state.chrome = true; render(); }
@@ -224,6 +325,7 @@ const SETTINGS = [
   { key: "softStart", label: "soft start", sub: "rain fades in over half a minute" },
   { key: "background", label: "keep playing when locked", sub: "rain continues with the screen off" },
   { key: "dim", label: "dim the screen", sub: "darkens after the controls fade away" },
+  { key: "alreadyPaid", label: "i already paid, promised", sub: "turns off the daily tip reminder — honor system, we don't check" },
 ];
 
 function buildLists() {
@@ -298,3 +400,4 @@ $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "
 render();
 requestAnimationFrame(tick);
 bootAudio();
+initTip();
