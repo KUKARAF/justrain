@@ -21,7 +21,7 @@ function savePaid(v) { try { localStorage.setItem("justrain.paid", v ? "1" : "0"
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
   vol: 0.72,
-  sheet: null, chrome: true,
+  tray: false, chrome: true,   // tray: settings tray pulled out; chrome: peek visible
   thunder: true, softStart: true, background: true, dim: false,
   alreadyPaid: loadPaid(),
 };
@@ -302,8 +302,88 @@ function toggleSetting(key) {
   if (key === "alreadyPaid") savePaid(state.alreadyPaid);
   render();
 }
-function openSettings() { state.sheet = "settings"; state.chrome = true; render(); }
-function closeSheet() { state.sheet = null; render(); }
+
+/* ─────────────────────────── settings tray ─────────────────────────── */
+// The tray is a bottom sheet. Collapsed, only its top (grip, volume, thunder)
+// peeks out; expanded, it slides up to reveal the rest. Its translateY is set
+// here: 0 = expanded, trayOff = collapsed, trayOff + 24 (faded) = idle-hidden.
+let trayOff = 0, trayDrag = null, trayPushed = false, swallowClick = false;
+const safeProbe = document.createElement("div");
+safeProbe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;height:env(safe-area-inset-bottom)";
+document.body.appendChild(safeProbe);
+
+function measureTray() {
+  const top = $("trayTop");
+  const visible = top.offsetTop + top.offsetHeight + 16 + safeProbe.offsetHeight;
+  trayOff = Math.max(0, $("tray").offsetHeight - visible);
+  $("screen").style.setProperty("--peek-h", visible + "px");
+}
+
+function setTray(open, fromPop) {
+  idleAt = Date.now(); state.chrome = true;
+  if (state.tray !== open) {
+    state.tray = open;
+    if (open && !trayPushed) {
+      // a history entry so the Android back button collapses the tray
+      try { history.pushState({ tray: 1 }, ""); trayPushed = true; } catch (_) {}
+    } else if (!open) {
+      $("trayMore").scrollTop = 0;
+      if (trayPushed && !fromPop) { trayPushed = false; history.back(); }
+    }
+  }
+  render();
+}
+window.addEventListener("popstate", () => { if (trayPushed) { trayPushed = false; setTray(false, true); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.tray) setTray(false); });
+
+// Drag the tray by its top (grip / peek rows). The finger is followed 1:1;
+// on release it snaps by fling velocity, else by whether it passed halfway.
+function onTrayDown(e) {
+  idleAt = Date.now();
+  if (e.button > 0 || trayDrag) return;
+  const base = state.tray ? 0 : trayOff;
+  trayDrag = { id: e.pointerId, y0: e.clientY, base, y: base, moved: false, pts: [[e.timeStamp, e.clientY]] };
+  const tray = $("tray"), bd = $("backdrop"), more = $("trayMore");
+  const move = (ev) => {
+    const d = trayDrag;
+    if (!d || ev.pointerId !== d.id) return;
+    const dy = ev.clientY - d.y0;
+    if (!d.moved) {
+      if (Math.abs(dy) < 6) return;
+      d.moved = true;
+      tray.classList.add("dragging"); bd.classList.add("dragging");
+    }
+    idleAt = Date.now();
+    let y = d.base + dy;
+    if (y < 0) y *= 0.25;                 // rubber-band past fully open
+    y = Math.min(trayOff, y);
+    d.y = y;
+    d.pts.push([ev.timeStamp, ev.clientY]);
+    while (d.pts.length > 2 && ev.timeStamp - d.pts[0][0] > 100) d.pts.shift();
+    const p = trayOff ? 1 - Math.max(0, y) / trayOff : 1;
+    tray.style.transform = "translateY(" + y + "px)";
+    bd.style.opacity = String(p); more.style.opacity = String(p);
+  };
+  const up = (ev) => {
+    const d = trayDrag;
+    if (!d || ev.pointerId !== d.id) return;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    trayDrag = null;
+    if (!d.moved) return;                 // plain tap: let click handlers run
+    swallowClick = true; setTimeout(() => { swallowClick = false; }, 350);
+    tray.classList.remove("dragging"); bd.classList.remove("dragging");
+    bd.style.opacity = ""; more.style.opacity = "";
+    const [t0, y0] = d.pts[0], [t1, y1] = d.pts[d.pts.length - 1];
+    const v = t1 > t0 ? (y1 - y0) / (t1 - t0) : 0;   // px/ms, + = downward
+    const open = v < -0.4 ? true : v > 0.4 ? false : d.y < trayOff / 2;
+    setTray(open);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
 
 function onVolDown(e) {
   const el = $("volTrack");
@@ -320,8 +400,9 @@ function onVolDown(e) {
 }
 
 /* ─────────────────────────── render ─────────────────────────── */
+// thunder lives in the tray's always-visible peek row (#thunderRow), so it is
+// not repeated here.
 const SETTINGS = [
-  { key: "thunder", label: "thunder", sub: "a distant roll every few minutes" },
   { key: "softStart", label: "soft start", sub: "rain fades in over half a minute" },
   { key: "background", label: "keep playing when locked", sub: "rain continues with the screen off" },
   { key: "dim", label: "dim the screen", sub: "darkens after the controls fade away" },
@@ -346,7 +427,7 @@ function buildLists() {
 
 function render() {
   const s = state;
-  const show = s.chrome || !s.playing;
+  const show = s.chrome || !s.playing || s.tray;
 
   $("pauseIcon").style.display = s.playing ? "block" : "none";
   $("playIcon").style.display = s.playing ? "none" : "block";
@@ -357,14 +438,17 @@ function render() {
 
   $("thunderTrack").classList.toggle("on", s.thunder);
 
-  $("chrome").style.opacity = show ? "1" : "0";
-  $("chrome").style.transform = show ? "translateY(0)" : "translateY(14px)";
-  $("chrome").style.pointerEvents = show ? "auto" : "none";
-  $("gearWrap").style.opacity = show ? "1" : "0";
-  $("gearWrap").style.pointerEvents = show ? "auto" : "none";
-
-  $("backdrop").classList.toggle("show", !!s.sheet);
-  $("settingsSheet").classList.toggle("open", s.sheet === "settings");
+  measureTray();
+  if (!trayDrag || !trayDrag.moved) {
+    const tray = $("tray");
+    tray.style.transform = "translateY(" + (s.tray ? 0 : trayOff + (show ? 0 : 24)) + "px)";
+    tray.style.opacity = show ? "1" : "0";
+    tray.style.pointerEvents = show ? "auto" : "none";
+    tray.classList.toggle("open", s.tray);
+    $("backdrop").classList.toggle("show", s.tray);
+  }
+  $("trayGrip").setAttribute("aria-expanded", String(s.tray));
+  $("trayMore").inert = !s.tray;
 
   $("settingsList").querySelectorAll(".set").forEach((b) => {
     b.querySelector(".switch").classList.toggle("on", !!s[b.dataset.key]);
@@ -373,13 +457,13 @@ function render() {
   updateDim(show);
 }
 function updateDim(show) {
-  if (show === undefined) show = state.chrome || !state.playing;
-  $("screen").classList.toggle("dim", state.dim && state.playing && !show && !state.sheet);
+  if (show === undefined) show = state.chrome || !state.playing || state.tray;
+  $("screen").classList.toggle("dim", state.dim && state.playing && !show && !state.tray);
 }
 
 /* ─────────────────────────── idle-chrome-hide loop ─────────────────────────── */
 setInterval(() => {
-  if (state.playing && !state.sheet && state.chrome && Date.now() - idleAt > 4500) {
+  if (state.playing && !state.tray && !trayDrag && state.chrome && Date.now() - idleAt > 4500) {
     state.chrome = false; render();
   }
 }, 1000);
@@ -390,14 +474,20 @@ $("screen").addEventListener("click", (e) => {
 });
 $("playBtn").addEventListener("click", (e) => { e.stopPropagation(); togglePlay(); });
 $("thunderRow").addEventListener("click", (e) => { e.stopPropagation(); toggleThunder(); });
-$("gearBtn").addEventListener("click", (e) => { e.stopPropagation(); openSettings(); });
-$("backdrop").addEventListener("click", closeSheet);
+$("trayGrip").addEventListener("click", (e) => { e.stopPropagation(); setTray(!state.tray); });
+$("trayTop").addEventListener("pointerdown", onTrayDown);
+// a drag that started on a row must not also toggle it on release
+$("tray").addEventListener("click", (e) => { if (swallowClick) { swallowClick = false; e.stopPropagation(); e.preventDefault(); } }, true);
+$("backdrop").addEventListener("click", () => setTray(false));
+window.addEventListener("resize", render);
 $("volTrack").addEventListener("pointerdown", (e) => { e.stopPropagation(); onVolDown(e); });
 $("errclose").addEventListener("click", (e) => { e.stopPropagation(); hideError(); });
 
 buildLists();
 $("appVersion").textContent = "justrain · " + (window.__JUSTRAIN_VERSION__ || "dev");
+$("tray").classList.add("no-anim");   // place the tray without animating in from y=0
 render();
+requestAnimationFrame(() => requestAnimationFrame(() => $("tray").classList.remove("no-anim")));
 requestAnimationFrame(tick);
 bootAudio();
 initTip();
