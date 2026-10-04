@@ -22,7 +22,9 @@ private const val DEFAULT_FADE_MS = 400L
  * notifyPausedExternally()/notifyStopped() so the notification's play/pause
  * icon reflects reality. The one path where THIS class drives the engine is
  * handleSetPlayWhenReady/handleStop, invoked when the OS itself issues a
- * play/pause (notification tap, Bluetooth button, Android Auto, etc).
+ * play/pause (notification tap, Bluetooth button, Android Auto, etc) — those
+ * go through [onPlayRequested]/[onPauseRequested] so PlaybackService can
+ * take/release audio focus exactly like it does for in-app play/pause.
  * Ported from metiq-xyz/android-app's EnginePlayer.kt, trimmed to drop
  * per-track artwork/color tinting (justrain has exactly one sound).
  */
@@ -30,6 +32,9 @@ private const val DEFAULT_FADE_MS = 400L
 class EnginePlayer(
     private val engine: AudioEngine,
     looper: Looper,
+    // Returns false to veto an OS-issued play (audio focus denied, e.g. mid-call).
+    private val onPlayRequested: () -> Boolean = { true },
+    private val onPauseRequested: () -> Unit = {},
 ) : SimpleBasePlayer(looper) {
 
     private var playing = false
@@ -47,12 +52,15 @@ class EnginePlayer(
         invalidateState()
     }
 
-    fun notifyPausedExternally() {
+    /**
+     * Pause driven by something other than the user: audio route loss
+     * (headphones unplugged — instant, since a fade would leak sound out of
+     * the speaker) or audio-focus loss (another app/call took over — short fade).
+     */
+    fun notifyPausedExternally(fadeMs: Long = 0) {
         if (!playing) return
         playing = false
-        // Instant pause: this fires on audio route loss (e.g. headphones
-        // unplugged), where a fade would leak sound out of the speaker.
-        engine.pause(fadeMs = 0)
+        engine.pause(fadeMs = fadeMs)
         invalidateState()
     }
 
@@ -100,11 +108,18 @@ class EnginePlayer(
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
+        if (playWhenReady && !onPlayRequested()) {
+            // Vetoed: getState() still reports paused, so the session (and
+            // the notification's play/pause icon) snaps back to paused.
+            playing = false
+            return Futures.immediateVoidFuture()
+        }
         playing = playWhenReady
         if (playWhenReady) {
             stopped = false
             engine.play(fadeMs = DEFAULT_FADE_MS)
         } else {
+            onPauseRequested()
             engine.pause(fadeMs = DEFAULT_FADE_MS)
         }
         return Futures.immediateVoidFuture()
@@ -117,6 +132,7 @@ class EnginePlayer(
     }
 
     override fun handleStop(): ListenableFuture<*> {
+        onPauseRequested()
         playing = false
         stopped = true
         engine.pause(fadeMs = DEFAULT_FADE_MS)

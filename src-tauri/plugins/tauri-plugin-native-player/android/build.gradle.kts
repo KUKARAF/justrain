@@ -27,6 +27,8 @@ android {
 
 dependencies {
     implementation(project(":tauri-android"))
+    // Same version tauri-android uses; needed for Plugin.onDestroy(AppCompatActivity).
+    implementation("androidx.appcompat:appcompat:1.6.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.media3:media3-common:1.10.1")
     implementation("androidx.media3:media3-session:1.10.1")

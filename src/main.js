@@ -17,6 +17,9 @@ const NP = "plugin:native-player|";
 // localStorage can throw (private mode, blocked storage).
 function loadPaid() { try { return localStorage.getItem("justrain.paid") === "1"; } catch (_) { return false; } }
 function savePaid(v) { try { localStorage.setItem("justrain.paid", v ? "1" : "0"); } catch (_) {} }
+// "pause other audio" (native audio focus) — defaults to on.
+function loadExclusive() { try { return localStorage.getItem("justrain.exclusive") !== "0"; } catch (_) { return true; } }
+function saveExclusive(v) { try { localStorage.setItem("justrain.exclusive", v ? "1" : "0"); } catch (_) {} }
 
 const state = {
   playing: false,          // becomes true only once audio is actually loaded & started
@@ -24,6 +27,7 @@ const state = {
   tray: false, chrome: true,   // tray: settings tray pulled out; chrome: peek visible
   thunder: true, softStart: true, background: true, dim: false,
   alreadyPaid: loadPaid(),
+  exclusive: loadExclusive(),
 };
 let idleAt = Date.now();
 
@@ -149,7 +153,12 @@ async function npSetVol(v) {
 }
 function setVolImmediate() { npSetVol(state.vol); }
 async function npPlay(soft) {
-  try { await npInvoke("play", { soft: !!soft }); return true; }
+  try {
+    const r = await npInvoke("play", { soft: !!soft, exclusive: state.exclusive });
+    // {playing:false}: audio focus denied (e.g. during a call) — not an error.
+    if (r && r.playing === false) { syncPlaying(false); return false; }
+    return true;
+  }
   catch (e) { showError("play failed: " + errText(e), e); return false; }
 }
 async function npPause() {
@@ -170,11 +179,42 @@ async function applyPlayState() {
   }
 }
 
+// Native -> JS sync. The notification, headset/Bluetooth buttons, unplugging
+// headphones and audio focus (calls, Spotify) all play/pause natively; the
+// plugin pushes a "state" event for each, and get_state pulls it on demand.
+// lockPaused: WE paused because the screen locked with "keep playing when
+// locked" off — that pause must not flip state.playing, or we'd not resume.
+let lockPaused = false;
+function syncPlaying(p) {
+  if (p) lockPaused = false;
+  else if (lockPaused) return;
+  if (state.playing === p) return;
+  state.playing = p;
+  state.chrome = true;
+  idleAt = Date.now();
+  render();
+}
+async function resyncPlaying() {
+  try { const r = await npInvoke("get_state"); if (r) syncPlaying(!!r.playing); }
+  catch (e) { console.error("[justrain] get_state", e); }
+}
+// Same not-initialized retry as npInvoke (addPluginListener invokes the plugin too).
+async function listenNative() {
+  for (let i = 0; i < 8; i++) {
+    try { await TAURI.core.addPluginListener("native-player", "state", (e) => syncPlaying(!!(e && e.playing))); return; }
+    catch (e) {
+      if (errText(e).toLowerCase().includes("not initialized") && i < 7) { await sleep(150); continue; }
+      console.error("[justrain] state listener", e); return;
+    }
+  }
+}
+
 // Boot: the rain audio is bundled in the APK, so the native player is ready
 // as soon as the plugin binds to its service. Start playing immediately.
 async function bootAudio() {
   if (!invoke) { showError("not running under Tauri — audio unavailable"); return; }
   audioReady = true;
+  await listenNative();
   try {
     state.playing = true;
     await applyPlayState();
@@ -185,11 +225,18 @@ async function bootAudio() {
   render();
 }
 
-// "keep playing when locked": when off, pause on background and resume on return.
+// "keep playing when locked": when off, pause on background and resume on return
+// — but only if that pause was ours (lockPaused). Otherwise (or if the user
+// played/paused from the notification meanwhile) just adopt the native state.
 document.addEventListener("visibilitychange", () => {
-  if (!audioReady || state.background) return;
-  if (document.hidden) { if (state.playing) npPause(); }
-  else if (state.playing) { npPlay(); setVolImmediate(); }
+  if (!audioReady) return;
+  if (document.hidden) {
+    if (!state.background && state.playing) { lockPaused = true; npPause(); }
+  } else if (lockPaused) {
+    lockPaused = false; npPlay(); setVolImmediate();
+  } else {
+    resyncPlaying();
+  }
 });
 
 /* ─────────────────────────── tip (in-app purchase) ─────────────────────────── */
@@ -300,6 +347,11 @@ function toggleSetting(key) {
   state[key] = !state[key];
   if (key === "dim") updateDim();
   if (key === "alreadyPaid") savePaid(state.alreadyPaid);
+  if (key === "exclusive") {
+    saveExclusive(state.exclusive);
+    // takes/releases audio focus right away if playing; otherwise applied on next play
+    if (audioReady) npInvoke("set_exclusive", { exclusive: state.exclusive }).catch((e) => console.error("[justrain] set_exclusive", e));
+  }
   render();
 }
 
@@ -404,6 +456,7 @@ function onVolDown(e) {
 // not repeated here.
 const SETTINGS = [
   { key: "softStart", label: "soft start", sub: "rain fades in over half a minute" },
+  { key: "exclusive", label: "pause other audio", sub: "pauses spotify & co. while it rains — turn off to layer rain over music" },
   { key: "background", label: "keep playing when locked", sub: "rain continues with the screen off" },
   { key: "dim", label: "dim the screen", sub: "darkens after the controls fade away" },
   { key: "alreadyPaid", label: "i already paid, promised", sub: "turns off the daily tip reminder — honor system, we don't check" },

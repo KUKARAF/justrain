@@ -27,9 +27,10 @@ private const val BLOCK_FRAMES = 1024
  * pre-decoded PCM with a coroutine feeder that wraps the read position back
  * to 0 for sample-accurate, gapless looping. Ported from
  * metiq-xyz/android-app's AudioEngine.kt, trimmed to one always-on layer
- * (no multi-layer mixing, no warmth EQ, no binaural tones) — and, just like
- * metiq, this never requests audio focus, so nothing can involuntarily pause
- * it (see PlaybackService for the one exception: AUDIO_BECOMING_NOISY).
+ * (no multi-layer mixing, no warmth EQ, no binaural tones). The engine itself
+ * knows nothing about audio focus — PlaybackService requests/abandons it
+ * around play/pause (behind the "pause other audio" setting) using the same
+ * [AUDIO_ATTRIBUTES] this track plays with.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AudioEngine(private val context: Context) {
@@ -216,21 +217,25 @@ class AudioEngine(private val context: Context) {
         val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
         val channelCount = if (channelMask == AudioFormat.CHANNEL_OUT_STEREO) 2 else 1
         val desired = BLOCK_FRAMES * channelCount * 2 * 4
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-            .build()
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
             .setSampleRate(sampleRate)
             .setChannelMask(channelMask)
             .build()
         return AudioTrack.Builder()
-            .setAudioAttributes(attrs)
+            .setAudioAttributes(AUDIO_ATTRIBUTES)
             .setAudioFormat(format)
             .setBufferSizeInBytes(maxOf(minBuf, desired))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .build()
+    }
+
+    companion object {
+        /** Shared with PlaybackService's AudioFocusRequest so focus matches what we play. */
+        val AUDIO_ATTRIBUTES: AudioAttributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
             .build()
     }
 }

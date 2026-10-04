@@ -13,12 +13,14 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 private const val TAG = "NativePlayerPlugin"
@@ -26,6 +28,12 @@ private const val TAG = "NativePlayerPlugin"
 @InvokeArg
 class PlayArgs {
     var soft: Boolean = false
+    var exclusive: Boolean = true
+}
+
+@InvokeArg
+class ExclusiveArgs {
+    var exclusive: Boolean = true
 }
 
 @InvokeArg
@@ -38,6 +46,11 @@ class VolumeArgs {
  * synchronous, in-process reference to its AudioEngine — instead of the
  * async MediaController/SessionToken IPC handshake (which was the actual
  * source of "player unavailable" failures).
+ *
+ * Native → JS: every playback state change (notification/headset/Bluetooth
+ * play-pause, headphones unplugged, audio focus loss/gain) is pushed as a
+ * "state" plugin event `{playing}`; `getState` lets the webview pull it after
+ * it may have missed events (e.g. while hidden).
  */
 @TauriPlugin
 class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
@@ -46,13 +59,22 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            binder = service as? PlaybackService.LocalBinder
-            Log.i(TAG, "onServiceConnected, binder=$binder")
+            val b = service as? PlaybackService.LocalBinder
+            binder = b
+            Log.i(TAG, "onServiceConnected, binder=$b")
+            b ?: return
+            b.setStateListener { playing -> emitState(playing) }
+            emitState(b.isPlaying())
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.w(TAG, "onServiceDisconnected")
+            binder?.setStateListener(null)
             binder = null
         }
+    }
+
+    private fun emitState(playing: Boolean) {
+        trigger("state", JSObject().put("playing", playing))
     }
 
     // Bind here (not in the constructor/init block): if binding threw during
@@ -68,6 +90,15 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Throwable) {
             Log.e(TAG, "bindService() failed", e)
         }
+    }
+
+    // The service outlives the Activity; drop its reference to us (and thus
+    // the Activity/WebView) so a recreated Activity doesn't leak this one.
+    override fun onDestroy(activity: AppCompatActivity) {
+        binder?.setStateListener(null)
+        binder = null
+        runCatching { this.activity.unbindService(connection) }
+        super.onDestroy(activity)
     }
 
     private fun ensureNotificationPermission() {
@@ -88,9 +119,13 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
         val b = binder
         if (b == null) { invoke.reject("player unavailable"); return }
         mainHandler.post {
-            b.play(args.soft) { success ->
-                if (success) invoke.resolve()
-                else invoke.reject("failed to start playback — see logcat tag AudioEngine")
+            b.play(args.soft, args.exclusive) { result ->
+                when (result) {
+                    PlayResult.STARTED -> invoke.resolve(JSObject().put("playing", true))
+                    // Not an error: another app (usually a call) holds audio focus.
+                    PlayResult.FOCUS_DENIED -> invoke.resolve(JSObject().put("playing", false))
+                    PlayResult.FAILED -> invoke.reject("failed to start playback — see logcat tag AudioEngine")
+                }
             }
         }
     }
@@ -111,5 +146,21 @@ class NativePlayerPlugin(private val activity: Activity) : Plugin(activity) {
         val v = args.volume.coerceIn(0f, 1f)
         mainHandler.post { b.setVolume(v) }
         invoke.resolve()
+    }
+
+    @Command
+    fun setExclusive(invoke: Invoke) {
+        val args = invoke.parseArgs(ExclusiveArgs::class.java)
+        val b = binder
+        if (b == null) { invoke.reject("player unavailable"); return }
+        mainHandler.post { b.setExclusive(args.exclusive) }
+        invoke.resolve()
+    }
+
+    @Command
+    fun getState(invoke: Invoke) {
+        val b = binder
+        if (b == null) { invoke.reject("player unavailable"); return }
+        mainHandler.post { invoke.resolve(JSObject().put("playing", b.isPlaying())) }
     }
 }

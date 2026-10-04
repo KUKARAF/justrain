@@ -4,4 +4,8 @@ permissions = [
     "allow-play",
     "allow-pause",
     "allow-set-volume",
+    "allow-set-exclusive",
+    "allow-get-state",
+    "allow-register-listener",
+    "allow-remove-listener",
 ]
