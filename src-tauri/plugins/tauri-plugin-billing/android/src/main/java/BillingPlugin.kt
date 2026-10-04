@@ -146,13 +146,19 @@ class BillingPlugin(private val activity: Activity) : Plugin(activity) {
         pendingTip?.let { it.reject(message); pendingTip = null }
     }
 
+    // PBL 8 one-time products created with purchase options expose their
+    // offer(s) via the LIST; the legacy singular getter returns null for them.
+    // Fall back to the singular for old-style products so both work.
+    private fun firstOffer(pd: ProductDetails): ProductDetails.OneTimePurchaseOfferDetails? =
+        pd.oneTimePurchaseOfferDetailsList?.firstOrNull() ?: pd.oneTimePurchaseOfferDetails
+
     // ── commands ──────────────────────────────────────────────────────────
     @Command
     fun getPrice(invoke: Invoke) {
         connect { ok ->
             if (!ok) { invoke.reject("Google Play Billing unavailable"); return@connect }
             queryProduct { pd ->
-                val price = pd?.oneTimePurchaseOfferDetails?.formattedPrice
+                val price = pd?.let { firstOffer(it)?.formattedPrice }
                 if (price == null) {
                     invoke.reject("tip product not available")
                 } else {
@@ -170,9 +176,12 @@ class BillingPlugin(private val activity: Activity) : Plugin(activity) {
             if (!ok) { rejectTip("Google Play Billing unavailable"); return@connect }
             queryProduct { pd ->
                 if (pd == null) { rejectTip("tip product not available"); return@queryProduct }
-                val productParams = BillingFlowParams.ProductDetailsParams.newBuilder()
+                // PBL 8 requires an offer token in the flow params for one-time
+                // products that have purchase options (ours does: "base").
+                val paramsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
                     .setProductDetails(pd)
-                    .build()
+                firstOffer(pd)?.offerToken?.let { paramsBuilder.setOfferToken(it) }
+                val productParams = paramsBuilder.build()
                 val flowParams = BillingFlowParams.newBuilder()
                     .setProductDetailsParamsList(listOf(productParams))
                     .build()
